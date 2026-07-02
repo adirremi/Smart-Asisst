@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/lib/AuthContext';
+import { useProfile } from '@/hooks/useProfile';
+import { COUNTRIES, US_STATES, resolveTimezone, formatTimezoneLabel } from '@/lib/locations';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +15,13 @@ import { Toaster } from "@/components/ui/toaster";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -39,7 +50,10 @@ import {
   EyeOff,
   Settings2,
   Calendar,
-  Webhook
+  Webhook,
+  Home,
+  Clock,
+  Loader2
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -52,9 +66,53 @@ export default function Settings() {
   const [visibleKeys, setVisibleKeys] = React.useState({});
   const [isConnecting, setIsConnecting] = React.useState(false);
   const [isSyncing, setIsSyncing] = React.useState(false);
+  const [finishingConnect, setFinishingConnect] = React.useState(false);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { data: profile, refreshProfile } = useProfile(user?.id);
+
+  // Local timezone editor state (for users who picked the wrong region).
+  const [tzCountry, setTzCountry] = useState('IL');
+  const [tzState, setTzState] = useState('');
+  const [savingTz, setSavingTz] = useState(false);
+
+  useEffect(() => {
+    if (profile) {
+      setTzCountry(profile.country || 'IL');
+      setTzState(profile.state_code || '');
+    }
+  }, [profile]);
+
+  const resolvedTz = resolveTimezone(tzCountry, tzState);
+
+  const handleSaveTimezone = async () => {
+    if (!user?.id) return;
+    if (tzCountry === 'US' && !tzState) {
+      toast({ title: 'נא לבחור מדינה (State)', variant: 'destructive' });
+      return;
+    }
+    setSavingTz(true);
+    try {
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({
+          country: tzCountry,
+          state_code: tzCountry === 'US' ? tzState : null,
+          timezone: resolvedTz,
+        })
+        .eq('user_id', user.id);
+      if (error) throw error;
+      refreshProfile();
+      toast({ title: 'אזור הזמן עודכן', description: formatTimezoneLabel(resolvedTz) });
+    } catch (err) {
+      toast({ title: 'שגיאה בעדכון אזור הזמן', description: err.message, variant: 'destructive' });
+    } finally {
+      setSavingTz(false);
+    }
+  };
 
   const { data: connections = [] } = useQuery({
     queryKey: ['calendarConnections'],
@@ -136,16 +194,31 @@ export default function Settings() {
     const status = params.get('google');
     if (!status) return;
 
+    // Clear the query param so a refresh doesn't re-trigger this.
+    window.history.replaceState({}, document.title, window.location.pathname);
+
     if (status === 'connected') {
       toast({ title: "התחברת בהצלחה ל-Google Calendar", duration: 3000 });
       queryClient.invalidateQueries({ queryKey: ['calendarConnections'] });
+
+      // Auto-sync, then move the user to the main page.
+      setFinishingConnect(true);
+      base44.functions
+        .invoke('syncGoogleCalendar', {})
+        .then(() => {
+          queryClient.invalidateQueries({ queryKey: ['events'] });
+          toast({ title: "הסנכרון הושלם! מעביר אותך לעמוד הראשי", duration: 2500 });
+        })
+        .catch(() => {})
+        .finally(() => {
+          setTimeout(() => navigate(createPageUrl('Dashboard')), 1200);
+        });
     } else if (status === 'denied') {
       toast({ title: "החיבור בוטל", variant: "destructive", duration: 3000 });
     } else if (status === 'error') {
       toast({ title: "שגיאה בחיבור ל-Google", variant: "destructive", duration: 3000 });
     }
-    window.history.replaceState({}, document.title, window.location.pathname);
-  }, [queryClient, toast]);
+  }, [queryClient, toast, navigate]);
 
   const handleConnectGoogle = async () => {
     setIsConnecting(true);
@@ -195,6 +268,13 @@ export default function Settings() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100" dir="rtl">
+      {finishingConnect && (
+        <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm">
+          <Loader2 className="h-10 w-10 animate-spin text-purple-600" />
+          <p className="mt-4 font-medium text-slate-700">מסנכרן את היומן שלך...</p>
+          <p className="text-sm text-slate-500">עוד רגע נעביר אותך לעמוד הראשי</p>
+        </div>
+      )}
       <header className="bg-white/80 backdrop-blur-sm border-b sticky top-0 z-40">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -206,6 +286,12 @@ export default function Settings() {
               </Link>
               <h1 className="text-xl font-bold text-slate-900">הגדרות</h1>
             </div>
+            <Link to={createPageUrl("Dashboard")}>
+              <Button variant="outline" size="sm" className="gap-2">
+                <Home className="h-4 w-4" />
+                <span className="hidden sm:inline">לעמוד הראשי</span>
+              </Button>
+            </Link>
           </div>
         </div>
       </header>
@@ -217,11 +303,88 @@ export default function Settings() {
               <Calendar className="h-4 w-4" />
               אינטגרציות
             </TabsTrigger>
+            <TabsTrigger value="general" className="gap-2">
+              <Clock className="h-4 w-4" />
+              כללי
+            </TabsTrigger>
             <TabsTrigger value="webhooks" className="gap-2">
               <Webhook className="h-4 w-4" />
               Webhooks
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="general">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                    <Clock className="h-5 w-5 text-white" />
+                  </div>
+                  <div>
+                    <CardTitle>אזור זמן מקומי</CardTitle>
+                    <CardDescription>עדכן את המדינה כדי לתקן את השעון המקומי שלך</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>מדינה</Label>
+                  <Select
+                    value={tzCountry}
+                    onValueChange={(v) => {
+                      setTzCountry(v);
+                      setTzState('');
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {COUNTRIES.map((c) => (
+                        <SelectItem key={c.code} value={c.code}>
+                          {c.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {tzCountry === 'US' && (
+                  <div className="space-y-2">
+                    <Label>מדינה (State)</Label>
+                    <Select value={tzState} onValueChange={setTzState}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="בחר מדינה" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {US_STATES.map((s) => (
+                          <SelectItem key={s.code} value={s.code}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label>אזור הזמן שייקבע</Label>
+                  <div className="p-3 bg-slate-50 rounded-lg text-sm text-slate-700 border" dir="ltr">
+                    {formatTimezoneLabel(resolvedTz)}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    התזכורות היומיות והאירועים מחושבים לפי אזור הזמן הזה.
+                  </p>
+                </div>
+              </CardContent>
+              <CardFooter>
+                <Button onClick={handleSaveTimezone} disabled={savingTz} className="gap-2">
+                  {savingTz && <Loader2 className="h-4 w-4 animate-spin" />}
+                  שמור אזור זמן
+                </Button>
+              </CardFooter>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="integrations">
             <Card>
