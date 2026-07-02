@@ -161,3 +161,42 @@ end $$;
 create index if not exists tasks_user_created_idx on public.tasks (user_id, created_date desc);
 create index if not exists events_user_start_idx on public.calendar_events (user_id, start_at desc);
 create index if not exists events_google_id_idx on public.calendar_events (google_event_id);
+
+-- ---------------------------------------------------------------------------
+-- user_profiles (onboarding + admin approval) — see also supabase/user_profiles.sql
+-- ---------------------------------------------------------------------------
+create table if not exists public.user_profiles (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid unique not null references auth.users(id) on delete cascade,
+  email         text,
+  full_name     text not null,
+  phone         text not null,
+  country       text not null,
+  state_code    text,
+  timezone      text not null,
+  status        text not null default 'pending',
+  created_date  timestamptz default now(),
+  updated_date  timestamptz default now(),
+  approved_at   timestamptz,
+  approved_by   text
+);
+
+drop trigger if exists set_metadata on public.user_profiles;
+create trigger set_metadata
+  before insert or update on public.user_profiles
+  for each row execute function public.set_row_metadata();
+
+alter table public.user_profiles enable row level security;
+
+drop policy if exists "profile_select_own" on public.user_profiles;
+create policy "profile_select_own" on public.user_profiles
+  for select to authenticated
+  using (auth.uid() = user_id);
+
+drop policy if exists "profile_insert_own" on public.user_profiles;
+create policy "profile_insert_own" on public.user_profiles
+  for insert to authenticated
+  with check (auth.uid() = user_id and status = 'pending');
+
+create index if not exists user_profiles_status_idx on public.user_profiles (status);
+create index if not exists user_profiles_user_idx on public.user_profiles (user_id);

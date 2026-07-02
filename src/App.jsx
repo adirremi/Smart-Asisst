@@ -6,7 +6,14 @@ import { pagesConfig } from './pages.config'
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { useProfile } from '@/hooks/useProfile';
 import Login from '@/pages/Login';
+import Onboarding from '@/pages/Onboarding';
+import PendingApproval from '@/pages/PendingApproval';
+import RejectedApproval from '@/pages/RejectedApproval';
+import Admin from '@/pages/Admin';
+
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -17,10 +24,11 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout ?
   : <>{children}</>;
 
 const AuthenticatedApp = () => {
-  const { isLoadingAuth, isAuthenticated } = useAuth();
+  const { isLoadingAuth, isAuthenticated, user } = useAuth();
+  const isAdmin = user?.email === ADMIN_EMAIL;
+  const { data: profile, isLoading: isLoadingProfile, refreshProfile } = useProfile(user?.id);
 
-  // Show loading spinner while checking the session
-  if (isLoadingAuth) {
+  if (isLoadingAuth || (isAuthenticated && !isAdmin && isLoadingProfile)) {
     return (
       <div className="fixed inset-0 flex flex-col items-center justify-center bg-slate-50 gap-4">
         <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
@@ -29,12 +37,23 @@ const AuthenticatedApp = () => {
     );
   }
 
-  // Not signed in → show the login screen
   if (!isAuthenticated) {
     return <Login />;
   }
 
-  // Render the main app
+  // Admin bypasses onboarding / approval gate
+  if (!isAdmin) {
+    if (!profile) {
+      return <Onboarding onComplete={refreshProfile} />;
+    }
+    if (profile.status === 'pending') {
+      return <PendingApproval profile={profile} />;
+    }
+    if (profile.status === 'rejected') {
+      return <RejectedApproval />;
+    }
+  }
+
   return (
     <Routes>
       <Route path="/" element={
@@ -53,6 +72,9 @@ const AuthenticatedApp = () => {
           }
         />
       ))}
+      {isAdmin && (
+        <Route path="/Admin" element={<Admin />} />
+      )}
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );

@@ -18,8 +18,11 @@ import {
   Settings,
   LogOut,
   Menu,
-  X
+  X,
+  Shield
 } from "lucide-react";
+
+const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
 
 const navItems = [
   { name: 'Dashboard', label: 'דשבורד', icon: LayoutDashboard },
@@ -88,6 +91,21 @@ export default function Layout({ children, currentPageName }) {
               </Link>
             );
           })}
+          {user?.email === ADMIN_EMAIL && (
+            <Link
+              to={createPageUrl('Admin')}
+              className={`
+                flex items-center gap-3 px-4 py-3 rounded-lg transition-all
+                ${currentPageName === 'Admin'
+                  ? 'bg-gradient-to-r from-purple-600 to-pink-500 text-white shadow-lg'
+                  : 'text-slate-600 hover:bg-purple-50'
+                }
+              `}
+            >
+              <Shield className="h-5 w-5" />
+              <span className="font-medium">ניהול לקוחות</span>
+            </Link>
+          )}
         </nav>
 
         {user && (
