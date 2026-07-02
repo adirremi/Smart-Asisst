@@ -2,8 +2,21 @@
 // Provider-agnostic — set AI_PROVIDER=openai|gemini. Defaults to OpenAI gpt-4.1-mini.
 
 function buildSystemPrompt(todayFull, weekdayHe, timeZone) {
-  return `You are a classification and date-extraction engine. The user sends a WhatsApp message in Hebrew.
+  return `You are an intent + date-extraction engine for a tasks/calendar assistant. The user sends a WhatsApp message in Hebrew.
 Today is: ${todayFull} (${weekdayHe}). The user's local timezone is: ${timeZone}. Always interpret and output times in this local timezone.
+
+FIRST detect the user's INTENT, then fill the matching JSON.
+Intents:
+- "create_event" — schedule something with a time/date (see rules below).
+- "create_task" — an actionable to-do without a fixed time.
+- "view" — the user ASKS what they have. Triggers: "מה יש לי", "מה האירועים", "מה המשימות", "מה יש לי היום/מחר/השבוע", "תראה לי", "מה מתוכנן".
+- "cancel" — remove/delete something. Triggers: "בטל", "תבטל", "מחק", "תמחק", "תסיר", "בטלי".
+- "update" — move/reschedule/rename an event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל".
+- "complete" — mark a task done. Triggers: "סיימתי", "עשיתי", "ביצעתי", "גמרתי", "בוצע", "עשית".
+- "unknown" — greeting, question, small talk, or gibberish that is none of the above.
+
+For "view": set "scope" to "events" | "tasks" | "both", and "range" to "today" | "tomorrow" | "week" | "date" | "all". If a specific date/weekday is mentioned, use range "date" and put the absolute "date" as "YYYY-MM-DD" (relative to Today). Default range is "today"; if it only says "משימות" without time, use range "all".
+For "cancel"/"complete"/"update": put in "query" the core subject words that identify the item (WITHOUT time/date words, WITHOUT the trigger verb). For "update", optionally add "new_start_datetime" ("YYYY-MM-DD HH:MM:SS") and/or "new_title".
 
 Hebrew spelled-time rules (MUST):
 - If a time is written in Hebrew words (e.g., "בחמש", "בשבע", "בעשר", "באחת", "בשמונה וחצי") treat it as a SPECIFIC time.
@@ -18,16 +31,10 @@ Weekday interpretation rules:
 
 NEW RULE (MUST): If the message includes a date (absolute or relative like "מחר/היום/מחרתיים") but no specific time, treat it as an EVENT and use default time 09:00:00.
 
-Your task: Decide whether the message describes:
-1) a calendar event
-2) a task
-3) unknown (not an actionable task or event)
-Rules:
-- If a date AND a specific time are mentioned → event
-- If it is an action without a fixed time → task
-- If the message is NOT actionable — e.g. a greeting, a question, small talk,
-  an emoji-only message, or gibberish that is neither a task nor an event → unknown
-- If it IS an actionable item but you are unsure between task/event → task
+Creation rules (only when intent is create_event / create_task):
+- If a date AND a specific time are mentioned → create_event
+- If it is an action without a fixed time → create_task
+- If it IS an actionable item but you are unsure between event/task → create_task
 
 Date interpretation rules:
 - All dates MUST be calculated relative to "Today is".
@@ -60,10 +67,14 @@ CRITICAL TITLE RULE (STRICT):
 
 Hebrew cleanup: keep original meaning, fix obvious typos.
 
-Return ONLY valid JSON. No explanations.
-Event format: { "type": "event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30 }
-Task format: { "type": "task", "title": "" }
-Unknown format: { "type": "unknown" }`;
+Return ONLY valid JSON. No explanations. Use one of:
+{ "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30 }
+{ "intent": "create_task", "title": "" }
+{ "intent": "view", "scope": "events|tasks|both", "range": "today|tomorrow|week|date|all", "date": "YYYY-MM-DD" }
+{ "intent": "cancel", "target_type": "event|task", "query": "" }
+{ "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "" }
+{ "intent": "complete", "query": "" }
+{ "intent": "unknown" }`;
 }
 
 function extractJson(text) {
@@ -122,7 +133,7 @@ async function classifyGemini(systemPrompt, message) {
   return extractJson(text);
 }
 
-export async function classifyMessage({ message, timeZone, todayFull, weekdayHe }) {
+export async function interpretMessage({ message, timeZone, todayFull, weekdayHe }) {
   const systemPrompt = buildSystemPrompt(todayFull, weekdayHe, timeZone);
   const provider = (process.env.AI_PROVIDER || 'openai').toLowerCase();
 
@@ -131,9 +142,9 @@ export async function classifyMessage({ message, timeZone, todayFull, weekdayHe 
       ? await classifyGemini(systemPrompt, message)
       : await classifyOpenAI(systemPrompt, message);
 
-  if (!result || !result.type) {
-    // Couldn't parse a valid classification — treat as unrecognized.
-    return { type: 'unknown' };
+  if (!result || !result.intent) {
+    // Couldn't parse a valid response — treat as unrecognized.
+    return { intent: 'unknown' };
   }
   return result;
 }

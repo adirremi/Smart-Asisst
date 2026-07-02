@@ -1,8 +1,9 @@
 import { serviceClient, readJsonBody } from '../_lib/supabase.js';
 import { sendWasenderMessage, phonesMatch } from '../_lib/wasender.js';
-import { classifyMessage } from '../_lib/ai.js';
-import { zonedTimeToUtc, nowInTimeZone, formatForUser } from '../_lib/datetime.js';
-import { createGoogleEvent } from '../_lib/gcal.js';
+import { interpretMessage } from '../_lib/ai.js';
+import { zonedTimeToUtc, nowInTimeZone, formatForUser, viewRange } from '../_lib/datetime.js';
+import { createGoogleEvent, deleteGoogleEvent, updateGoogleEvent } from '../_lib/gcal.js';
+import { findBestMatch } from '../_lib/match.js';
 
 // Resolve the admin as a virtual user when the sender matches ADMIN_WHATSAPP_PHONE.
 // The admin skips onboarding (no user_profiles row), so we look up their auth user
@@ -162,16 +163,176 @@ export default async function handler(req, res) {
     const timeZone = profile.timezone || 'Asia/Jerusalem';
     const today = nowInTimeZone(timeZone);
 
-    // Classify with the AI model.
-    const result = await classifyMessage({
+    // Understand the user's intent.
+    const result = await interpretMessage({
       message: text,
       timeZone,
       todayFull: today.full,
       weekdayHe: today.weekdayHe,
     });
+    const intent = result.intent;
 
-    // Message that isn't a task or an event — tell the user and alert the admin.
-    if (result.type === 'unknown' || (result.type !== 'event' && result.type !== 'task')) {
+    // ---- VIEW: list upcoming events / open tasks ----
+    if (intent === 'view') {
+      const scope = result.scope || 'both';
+      const range = result.range || 'today';
+      const { startUtc, endUtc } = viewRange(range, result.date, timeZone);
+      const parts = [];
+
+      if (scope === 'events' || scope === 'both') {
+        const { data: events } = await supabase
+          .from('calendar_events')
+          .select('title, start_at')
+          .eq('user_id', profile.user_id)
+          .gte('start_at', startUtc.toISOString())
+          .lte('start_at', endUtc.toISOString())
+          .order('start_at', { ascending: true })
+          .limit(20);
+        if (events && events.length) {
+          const lines = events.map((ev, i) => {
+            const { dateStr, timeStr } = formatForUser(ev.start_at, timeZone);
+            return `${i + 1}. ${ev.title}, ${dateStr} ${timeStr}`;
+          });
+          parts.push(`📅 אירועים:\n${lines.join('\n')}`);
+        } else if (scope === 'events') {
+          parts.push('📅 אין אירועים בטווח המבוקש.');
+        }
+      }
+
+      if (scope === 'tasks' || scope === 'both') {
+        const { data: tasks } = await supabase
+          .from('tasks')
+          .select('title')
+          .eq('user_id', profile.user_id)
+          .in('status', ['open', 'in_progress'])
+          .order('created_date', { ascending: true });
+        if (tasks && tasks.length) {
+          const lines = tasks.map((t, i) => `${i + 1}. ${t.title}`);
+          parts.push(`✅ משימות פתוחות:\n${lines.join('\n')}`);
+        } else if (scope === 'tasks') {
+          parts.push('✅ אין לך משימות פתוחות. כל הכבוד!');
+        }
+      }
+
+      const body = parts.length ? parts.join('\n\n') : 'אין לך אירועים או משימות בטווח המבוקש 🙂';
+      await sendWasenderMessage(senderPhone, `היי ${profile.full_name || ''}!\n${body}`);
+      res.status(200).json({ success: true, intent });
+      return;
+    }
+
+    // ---- COMPLETE: mark a task as done ----
+    if (intent === 'complete') {
+      const { data: tasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', profile.user_id)
+        .in('status', ['open', 'in_progress']);
+      const match = findBestMatch(tasks || [], result.query || text);
+      if (!match) {
+        await sendWasenderMessage(senderPhone, `לא מצאתי משימה פתוחה שמתאימה ל"${result.query || text}" 🤔`);
+        res.status(200).json({ success: true, intent, matched: false });
+        return;
+      }
+      await supabase.from('tasks').update({ status: 'done' }).eq('id', match.id);
+      await sendWasenderMessage(senderPhone, `מעולה! סימנתי כבוצע ✅\n"${match.title}"`);
+      res.status(200).json({ success: true, intent, matched: true });
+      return;
+    }
+
+    // ---- CANCEL: delete an event or task ----
+    if (intent === 'cancel') {
+      const targetType = result.target_type || 'event';
+
+      if (targetType === 'task') {
+        const { data: tasks } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('user_id', profile.user_id)
+          .in('status', ['open', 'in_progress']);
+        const match = findBestMatch(tasks || [], result.query || text);
+        if (!match) {
+          await sendWasenderMessage(senderPhone, `לא מצאתי משימה שמתאימה ל"${result.query || text}" 🤔`);
+          res.status(200).json({ success: true, intent, matched: false });
+          return;
+        }
+        await supabase.from('tasks').delete().eq('id', match.id);
+        await sendWasenderMessage(senderPhone, `בוצע! מחקתי את המשימה 🗑️\n"${match.title}"`);
+        res.status(200).json({ success: true, intent, matched: true });
+        return;
+      }
+
+      // Cancel an event (upcoming).
+      const { data: events } = await supabase
+        .from('calendar_events')
+        .select('*')
+        .eq('user_id', profile.user_id)
+        .gte('start_at', new Date().toISOString())
+        .order('start_at', { ascending: true });
+      const match = findBestMatch(events || [], result.query || text);
+      if (!match) {
+        await sendWasenderMessage(senderPhone, `לא מצאתי אירוע קרוב שמתאים ל"${result.query || text}" 🤔`);
+        res.status(200).json({ success: true, intent, matched: false });
+        return;
+      }
+      if (match.google_event_id) {
+        await deleteGoogleEvent(supabase, connection, match.google_event_id).catch(() => {});
+      }
+      await supabase.from('calendar_events').delete().eq('id', match.id);
+      const { dateStr, timeStr } = formatForUser(match.start_at, timeZone);
+      await sendWasenderMessage(senderPhone, `בוצע! ביטלתי את האירוע 🗑️\n"${match.title}" (${dateStr} ${timeStr})`);
+      res.status(200).json({ success: true, intent, matched: true });
+      return;
+    }
+
+    // ---- UPDATE: move/rename an upcoming event ----
+    if (intent === 'update') {
+      const { data: events } = await supabase
+        .from('calendar_events')
+        .select('*')
+        .eq('user_id', profile.user_id)
+        .gte('start_at', new Date().toISOString())
+        .order('start_at', { ascending: true });
+      const match = findBestMatch(events || [], result.query || text);
+      if (!match) {
+        await sendWasenderMessage(senderPhone, `לא מצאתי אירוע קרוב שמתאים ל"${result.query || text}" 🤔`);
+        res.status(200).json({ success: true, intent, matched: false });
+        return;
+      }
+
+      const patch = {};
+      if (result.new_title) patch.title = result.new_title;
+      if (result.new_start_datetime) {
+        const newStart = zonedTimeToUtc(result.new_start_datetime, timeZone);
+        const oldDuration = new Date(match.end_at).getTime() - new Date(match.start_at).getTime();
+        const newEnd = new Date(newStart.getTime() + (oldDuration > 0 ? oldDuration : 30 * 60 * 1000));
+        patch.start_at = newStart.toISOString();
+        patch.end_at = newEnd.toISOString();
+      }
+
+      if (Object.keys(patch).length === 0) {
+        await sendWasenderMessage(senderPhone, `לא הבנתי מה לעדכן באירוע "${match.title}". נסה למשל: "תעביר את ${match.title} למחר בשמונה בערב".`);
+        res.status(200).json({ success: true, intent, matched: true, changed: false });
+        return;
+      }
+
+      await supabase.from('calendar_events').update(patch).eq('id', match.id);
+      if (match.google_event_id) {
+        await updateGoogleEvent(supabase, connection, match.google_event_id, {
+          title: patch.title,
+          start_at: patch.start_at,
+          end_at: patch.end_at,
+          timeZone,
+        }).catch(() => {});
+      }
+      const finalStart = patch.start_at || match.start_at;
+      const { dateStr, timeStr } = formatForUser(finalStart, timeZone);
+      await sendWasenderMessage(senderPhone, `עודכן! ✏️\n"${patch.title || match.title}"\nעכשיו ב-${dateStr} ${timeStr}`);
+      res.status(200).json({ success: true, intent, matched: true, changed: true });
+      return;
+    }
+
+    // ---- UNKNOWN: not actionable — tell the user and alert the admin ----
+    if (intent === 'unknown' || (intent !== 'create_event' && intent !== 'create_task')) {
       await sendWasenderMessage(
         senderPhone,
         `היי! לא הצלחתי לזהות את הבקשה שלך 🤔\nנסה לנסח מחדש - למשל משימה ("לשלם חשבונות") או אירוע עם זמן ("מחר בעשר פגישה עם דנה").`
@@ -185,11 +346,12 @@ export default async function handler(req, res) {
         ).catch(() => {});
       }
 
-      res.status(200).json({ success: true, type: 'unknown' });
+      res.status(200).json({ success: true, intent: 'unknown' });
       return;
     }
 
-    if (result.type === 'event' && result.start_datetime) {
+    // ---- CREATE EVENT ----
+    if (intent === 'create_event' && result.start_datetime) {
       const startUtc = zonedTimeToUtc(result.start_datetime, timeZone);
       const duration = Number(result.duration_minutes) || 30;
       const endUtc = new Date(startUtc.getTime() + duration * 60 * 1000);
@@ -213,24 +375,21 @@ export default async function handler(req, res) {
         .select()
         .single();
 
-      // Push to Google Calendar if connected.
-      if (connection) {
-        try {
-          const googleId = await createGoogleEvent(supabase, connection, {
-            title: eventRow.title,
-            start_at: eventRow.start_at,
-            end_at: eventRow.end_at,
-            timeZone,
-          });
-          if (googleId && inserted) {
-            await supabase
-              .from('calendar_events')
-              .update({ google_event_id: googleId, source: 'google' })
-              .eq('id', inserted.id);
-          }
-        } catch (gErr) {
-          console.error('GCal push failed:', gErr);
+      try {
+        const googleId = await createGoogleEvent(supabase, connection, {
+          title: eventRow.title,
+          start_at: eventRow.start_at,
+          end_at: eventRow.end_at,
+          timeZone,
+        });
+        if (googleId && inserted) {
+          await supabase
+            .from('calendar_events')
+            .update({ google_event_id: googleId, source: 'google' })
+            .eq('id', inserted.id);
         }
+      } catch (gErr) {
+        console.error('GCal push failed:', gErr);
       }
 
       const { dateStr, timeStr } = formatForUser(startUtc.toISOString(), timeZone);
@@ -239,11 +398,11 @@ export default async function handler(req, res) {
         `היי! יצרתי אירוע חדש 📅\n"${eventRow.title}"\nבתאריך ${dateStr} בשעה ${timeStr}`
       );
 
-      res.status(200).json({ success: true, type: 'event' });
+      res.status(200).json({ success: true, intent: 'create_event' });
       return;
     }
 
-    // Task
+    // ---- CREATE TASK ----
     const taskRow = {
       user_id: profile.user_id,
       created_by: profile.email,
@@ -260,7 +419,7 @@ export default async function handler(req, res) {
       `היי! נוספה מטלה חדשה ✅\n"${taskRow.title}"`
     );
 
-    res.status(200).json({ success: true, type: 'task' });
+    res.status(200).json({ success: true, intent: 'create_task' });
   } catch (err) {
     console.error('wasender webhook error:', err);
     // Always 200 so the provider doesn't spam retries.

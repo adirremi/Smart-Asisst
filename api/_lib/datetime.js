@@ -85,6 +85,38 @@ export function localMinutesOfDay(timeZone) {
   return hour * 60 + parseInt(parts.minute, 10);
 }
 
+// Compute a UTC [start, end] window for a "view" range in the user's local day(s).
+export function viewRange(range, dateStr, timeZone) {
+  const todayStr = nowInTimeZone(timeZone).dateStr;
+  const addDays = (str, n) => {
+    const d = new Date(`${str}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+
+  let startDay = todayStr;
+  let endDay = todayStr;
+
+  if (range === 'tomorrow') {
+    startDay = addDays(todayStr, 1);
+    endDay = startDay;
+  } else if (range === 'week') {
+    startDay = todayStr;
+    endDay = addDays(todayStr, 7);
+  } else if (range === 'date' && dateStr) {
+    startDay = dateStr;
+    endDay = dateStr;
+  } else if (range === 'all') {
+    startDay = todayStr;
+    endDay = addDays(todayStr, 365);
+  }
+
+  return {
+    startUtc: zonedTimeToUtc(`${startDay} 00:00:00`, timeZone),
+    endUtc: zonedTimeToUtc(`${endDay} 23:59:59`, timeZone),
+  };
+}
+
 // Human-friendly Hebrew date + time for confirmation messages.
 export function formatForUser(isoUtc, timeZone) {
   const date = new Date(isoUtc);
