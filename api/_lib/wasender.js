@@ -10,6 +10,15 @@ export function normalizePhone(phone) {
   return digits;
 }
 
+// Compare two phone numbers loosely (last 9 digits match).
+export function phonesMatch(a, b) {
+  const na = normalizePhone(a);
+  const nb = normalizePhone(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  return na.slice(-9) === nb.slice(-9);
+}
+
 export async function sendWasenderMessage(to, text) {
   const apiKey = process.env.WASENDER_API_KEY;
   const recipient = normalizePhone(to);

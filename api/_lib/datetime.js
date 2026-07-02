@@ -1,0 +1,86 @@
+// Timezone helpers using the built-in Intl API (no external deps).
+
+const HEB_WEEKDAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+
+function getOffsetMs(date, timeZone) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const parts = dtf.formatToParts(date).reduce((acc, p) => {
+    acc[p.type] = p.value;
+    return acc;
+  }, {});
+  const asUTC = Date.UTC(
+    +parts.year,
+    +parts.month - 1,
+    +parts.day,
+    +parts.hour,
+    +parts.minute,
+    +parts.second
+  );
+  return asUTC - date.getTime();
+}
+
+// Convert a wall-clock local time in `timeZone` to a UTC Date instant.
+export function zonedTimeToUtc(localStr, timeZone) {
+  const [datePart, timePartRaw] = String(localStr).split(/[ T]/);
+  const timePart = timePartRaw || '00:00:00';
+  const [y, mo, d] = datePart.split('-').map(Number);
+  const [h, mi, s = 0] = timePart.split(':').map(Number);
+  const utcGuess = Date.UTC(y, mo - 1, d, h, mi, s);
+  const offset = getOffsetMs(new Date(utcGuess), timeZone);
+  return new Date(utcGuess - offset);
+}
+
+// Current date/time as the user perceives it locally: { iso, weekdayHe, dateStr }.
+export function nowInTimeZone(timeZone) {
+  const now = new Date();
+  const dtf = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const parts = dtf.formatToParts(now).reduce((acc, p) => {
+    acc[p.type] = p.value;
+    return acc;
+  }, {});
+  const dateStr = `${parts.year}-${parts.month}-${parts.day}`;
+  const timeStr = `${parts.hour}:${parts.minute}:${parts.second}`;
+  const weekdayIdx = new Date(`${dateStr}T12:00:00Z`).getUTCDay();
+  return {
+    dateStr,
+    timeStr,
+    full: `${dateStr} ${timeStr}`,
+    weekdayHe: HEB_WEEKDAYS[weekdayIdx],
+  };
+}
+
+// Human-friendly Hebrew date + time for confirmation messages.
+export function formatForUser(isoUtc, timeZone) {
+  const date = new Date(isoUtc);
+  const dateStr = new Intl.DateTimeFormat('he-IL', {
+    timeZone,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date);
+  const timeStr = new Intl.DateTimeFormat('he-IL', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+  return { dateStr, timeStr };
+}

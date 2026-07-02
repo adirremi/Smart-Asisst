@@ -95,3 +95,28 @@ Content-Type: application/json
 
 **Calendar** (`/api/functions/calendarWebhook`, Basic Auth): `GET` returns upcoming
 events, `POST` triggers a Google Calendar sync for the owner user.
+
+## WhatsApp AI assistant
+
+Incoming WhatsApp messages are classified by an AI model (OpenAI `gpt-4.1-mini` by
+default; set `AI_PROVIDER=gemini` to switch) into either a **calendar event** or a
+**task**, following strict Hebrew date/time rules and the user's local timezone.
+
+Flow (`POST /api/webhook/wasender`):
+
+1. Wasender delivers the incoming message. The sender phone is matched to an
+   **approved** user in `user_profiles`.
+2. The message is classified relative to "today" in the user's timezone.
+3. **Event** → inserted into `calendar_events` (and pushed to Google Calendar if the
+   user is connected). **Task** → inserted into `tasks`. Both scoped to that user's
+   `user_id`.
+4. A Hebrew confirmation message is sent back over WhatsApp.
+
+Setup: in the Wasender dashboard set the webhook URL to
+`https://YOUR_APP.vercel.app/api/webhook/wasender` and enable the
+`messages.received` event. Optionally set `WASENDER_WEBHOOK_SECRET` and pass it as
+the `x-webhook-secret` header or `?secret=` query param. Add `OPENAI_API_KEY`
+(or `GEMINI_API_KEY`) to the Vercel environment variables.
+
+> Note: tasks and events use one shared table each with per-user `user_id` + Row
+> Level Security — no separate table per client is needed.
