@@ -4,6 +4,40 @@ import { classifyMessage } from '../_lib/ai.js';
 import { zonedTimeToUtc, nowInTimeZone, formatForUser } from '../_lib/datetime.js';
 import { createGoogleEvent } from '../_lib/gcal.js';
 
+// Resolve the admin as a virtual user when the sender matches ADMIN_WHATSAPP_PHONE.
+// The admin skips onboarding (no user_profiles row), so we look up their auth user
+// by ADMIN_EMAIL and force the Jerusalem timezone.
+async function resolveAdminProfile(supabase, senderPhone) {
+  const adminPhones = (process.env.ADMIN_WHATSAPP_PHONE || '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const adminEmails = (process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (!adminPhones.some((p) => phonesMatch(p, senderPhone)) || adminEmails.length === 0) {
+    return null;
+  }
+
+  // Find the admin's auth user by email (paginate through users).
+  for (let page = 1; page <= 10; page += 1) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
+    if (error || !data?.users?.length) break;
+    const match = data.users.find((u) => adminEmails.includes((u.email || '').toLowerCase()));
+    if (match) {
+      return {
+        user_id: match.id,
+        email: match.email,
+        timezone: 'Asia/Jerusalem',
+      };
+    }
+    if (data.users.length < 200) break;
+  }
+  return null;
+}
+
 // Incoming WhatsApp messages from Wasender.
 // Configure this URL as your webhook in the Wasender dashboard.
 export default async function handler(req, res) {
@@ -54,7 +88,12 @@ export default async function handler(req, res) {
       .select('*')
       .eq('status', 'approved');
 
-    const profile = (profiles || []).find((p) => phonesMatch(p.phone, senderPhone));
+    let profile = (profiles || []).find((p) => phonesMatch(p.phone, senderPhone));
+
+    // Fallback: the admin skips onboarding, so match them by ADMIN_WHATSAPP_PHONE.
+    if (!profile) {
+      profile = await resolveAdminProfile(supabase, senderPhone);
+    }
 
     if (!profile) {
       // Unknown / unapproved sender — ignore silently.
