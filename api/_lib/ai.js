@@ -9,6 +9,7 @@ FIRST detect the user's INTENT, then fill the matching JSON.
 Intents:
 - "create_event" — schedule something with a time/date (see rules below).
 - "create_task" — an actionable to-do without a fixed time.
+- "create_multi" — the message contains SEVERAL distinct items (e.g. a task AND an event, or two tasks). Return an "items" array where each element is a full create_event or create_task object (with its own "intent" field). Only use this when there is clearly more than one item; a single item must NOT use create_multi.
 - "view" — the user ASKS what they have. Triggers: "מה יש לי", "מה האירועים", "מה המשימות", "מה יש לי היום/מחר/השבוע", "תראה לי", "מה מתוכנן".
 - "cancel" — remove/delete something. Triggers: "בטל", "תבטל", "מחק", "תמחק", "תסיר", "בטלי".
 - "update" — move/reschedule/rename an event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל".
@@ -81,6 +82,7 @@ Hebrew cleanup: keep original meaning, fix obvious typos.
 Return ONLY valid JSON. No explanations. Use one of:
 { "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30 }
 { "intent": "create_task", "title": "" }
+{ "intent": "create_multi", "items": [ { "intent": "create_task", "title": "" }, { "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30 } ] }
 { "intent": "view", "scope": "events|tasks|both", "range": "today|tomorrow|week|date|all", "date": "YYYY-MM-DD" }
 { "intent": "cancel", "target_type": "event|task", "query": "" }
 { "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "" }

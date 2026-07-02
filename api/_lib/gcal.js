@@ -33,7 +33,7 @@ export async function createGoogleEvent(supabase, connection, ev) {
     return null;
   }
   const data = await res.json();
-  return data.id || null;
+  return { id: data.id || null, htmlLink: data.htmlLink || null };
 }
 
 // Delete an event from the user's Google Calendar.

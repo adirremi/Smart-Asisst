@@ -5,13 +5,13 @@ import { localMinutesOfDay, formatForUser } from '../_lib/datetime.js';
 // Daily WhatsApp reminders, sent per-user in their own local timezone:
 //   - 20:15  → upcoming events
 //   - 08:45  → today's open tasks
-// Trigger this from a Vercel Cron every 15 minutes (see vercel.json).
-// Because it runs every 15 min and checks each user's local clock, new users
-// are picked up automatically without any per-user scheduling.
+// Triggered by a Vercel Cron at :15 and :45 past every hour (see vercel.json).
+// Checking each user's local clock lets it cover every timezone with just two
+// ticks per hour, and new users are picked up automatically.
 
 const EVENTS_TARGET = 20 * 60 + 15; // 20:15
 const TASKS_TARGET = 8 * 60 + 45; // 08:45
-const WINDOW = 15; // must match the cron cadence
+const WINDOW = 15; // one cron tick lands exactly on each target minute
 
 function inWindow(minutesNow, target) {
   return minutesNow >= target && minutesNow < target + WINDOW;

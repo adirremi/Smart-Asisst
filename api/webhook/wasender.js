@@ -414,7 +414,7 @@ export default async function handler(req, res) {
     }
 
     // ---- UNKNOWN: not actionable — tell the user and alert the admin ----
-    if (intent === 'unknown' || (intent !== 'create_event' && intent !== 'create_task')) {
+    if (!['create_event', 'create_task', 'create_multi'].includes(intent)) {
       await sendWasenderMessage(
         senderPhone,
         `היי! לא הצלחתי לזהות את הבקשה שלך 🤔\nנסה לנסח מחדש - למשל משימה ("לשלם חשבונות") או אירוע עם זמן ("מחר בעשר פגישה עם דנה").`
@@ -432,75 +432,134 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ---- CREATE EVENT ----
-    if (intent === 'create_event' && result.start_datetime) {
-      const startUtc = zonedTimeToUtc(result.start_datetime, timeZone);
-      const duration = Number(result.duration_minutes) || 30;
-      const endUtc = new Date(startUtc.getTime() + duration * 60 * 1000);
+    const normalizeTitle = (s) =>
+      String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 
-      const eventRow = {
+    // Create one task; returns a summary object.
+    const createTaskItem = async (item) => {
+      const title = item.title || text;
+      await supabase.from('tasks').insert({
         user_id: profile.user_id,
         created_by: profile.email,
-        title: result.title || text,
+        title,
         description: '',
-        start_at: startUtc.toISOString(),
-        end_at: endUtc.toISOString(),
-        location: '',
-        attendees: [],
-        source: 'local',
-        all_day: false,
-      };
+        status: 'open',
+        priority: 'medium',
+        external_source: 'whatsapp',
+      });
+      return { type: 'task', title };
+    };
+
+    // Create one event (with duplicate guard + Google push); returns a summary object.
+    const createEventItem = async (item) => {
+      if (!item.start_datetime) return createTaskItem(item);
+
+      const startUtc = zonedTimeToUtc(item.start_datetime, timeZone);
+      const duration = Number(item.duration_minutes) || 30;
+      const endUtc = new Date(startUtc.getTime() + duration * 60 * 1000);
+      const title = item.title || text;
+      const { dateStr, timeStr } = formatForUser(startUtc.toISOString(), timeZone);
+
+      // Duplicate guard: same title within a minute of the same start time.
+      const winStart = new Date(startUtc.getTime() - 60 * 1000).toISOString();
+      const winEnd = new Date(startUtc.getTime() + 60 * 1000).toISOString();
+      const { data: near } = await supabase
+        .from('calendar_events')
+        .select('title, start_at')
+        .eq('user_id', profile.user_id)
+        .gte('start_at', winStart)
+        .lte('start_at', winEnd);
+      if ((near || []).some((e) => normalizeTitle(e.title) === normalizeTitle(title))) {
+        return { type: 'event', duplicate: true, title, dateStr, timeStr };
+      }
 
       const { data: inserted } = await supabase
         .from('calendar_events')
-        .insert(eventRow)
+        .insert({
+          user_id: profile.user_id,
+          created_by: profile.email,
+          title,
+          description: '',
+          start_at: startUtc.toISOString(),
+          end_at: endUtc.toISOString(),
+          location: '',
+          attendees: [],
+          source: 'local',
+          all_day: false,
+        })
         .select()
         .single();
 
+      let htmlLink = null;
       try {
-        const googleId = await createGoogleEvent(supabase, connection, {
-          title: eventRow.title,
-          start_at: eventRow.start_at,
-          end_at: eventRow.end_at,
+        const gEvent = await createGoogleEvent(supabase, connection, {
+          title,
+          start_at: startUtc.toISOString(),
+          end_at: endUtc.toISOString(),
           timeZone,
         });
-        if (googleId && inserted) {
+        if (gEvent?.id && inserted) {
+          htmlLink = gEvent.htmlLink;
           await supabase
             .from('calendar_events')
-            .update({ google_event_id: googleId, source: 'google' })
+            .update({ google_event_id: gEvent.id, source: 'google' })
             .eq('id', inserted.id);
         }
       } catch (gErr) {
         console.error('GCal push failed:', gErr);
       }
 
-      const { dateStr, timeStr } = formatForUser(startUtc.toISOString(), timeZone);
-      await sendWasenderMessage(
-        senderPhone,
-        `היי! יצרתי אירוע חדש 📅\n"${eventRow.title}"\nבתאריך ${dateStr} בשעה ${timeStr}`
-      );
+      return { type: 'event', duplicate: false, title, dateStr, timeStr, htmlLink };
+    };
 
+    // ---- CREATE MULTI: several items in one message ----
+    if (intent === 'create_multi' && Array.isArray(result.items) && result.items.length) {
+      const results = [];
+      for (const it of result.items) {
+        const r =
+          it.intent === 'create_event' || it.start_datetime
+            ? await createEventItem(it)
+            : await createTaskItem(it);
+        results.push(r);
+      }
+      const lines = results.map((r) => {
+        if (r.type === 'event') {
+          return r.duplicate
+            ? `⚠️ "${r.title}" כבר קיים (${r.dateStr} ${r.timeStr})`
+            : `📅 ${r.title} — ${r.dateStr} ${r.timeStr}`;
+        }
+        return `✅ ${r.title}`;
+      });
+      const links = results
+        .filter((r) => r.htmlLink)
+        .map((r) => `🔗 לצפייה ב"${r.title}":\n${r.htmlLink}`);
+      let msg = `היי! הוספתי עבורך:\n${lines.join('\n')}`;
+      if (links.length) msg += `\n\n${links.join('\n\n')}`;
+      await sendWasenderMessage(senderPhone, msg);
+      res.status(200).json({ success: true, intent, count: results.length });
+      return;
+    }
+
+    // ---- CREATE EVENT ----
+    if (intent === 'create_event' && result.start_datetime) {
+      const r = await createEventItem(result);
+      if (r.duplicate) {
+        await sendWasenderMessage(
+          senderPhone,
+          `כבר קיים אירוע "${r.title}" ב-${r.dateStr} ${r.timeStr}, אז לא הוספתי שוב 🙂`
+        );
+      } else {
+        let msg = `היי! יצרתי אירוע חדש 📅\n"${r.title}"\nבתאריך ${r.dateStr} בשעה ${r.timeStr}`;
+        if (r.htmlLink) msg += `\n\n🔗 לצפייה ביומן:\n${r.htmlLink}`;
+        await sendWasenderMessage(senderPhone, msg);
+      }
       res.status(200).json({ success: true, intent: 'create_event' });
       return;
     }
 
-    // ---- CREATE TASK ----
-    const taskRow = {
-      user_id: profile.user_id,
-      created_by: profile.email,
-      title: result.title || text,
-      description: '',
-      status: 'open',
-      priority: 'medium',
-      external_source: 'whatsapp',
-    };
-    await supabase.from('tasks').insert(taskRow);
-
-    await sendWasenderMessage(
-      senderPhone,
-      `היי! נוספה מטלה חדשה ✅\n"${taskRow.title}"`
-    );
-
+    // ---- CREATE TASK (default) ----
+    const created = await createTaskItem(result);
+    await sendWasenderMessage(senderPhone, `היי! נוספה מטלה חדשה ✅\n"${created.title}"`);
     res.status(200).json({ success: true, intent: 'create_task' });
   } catch (err) {
     console.error('wasender webhook error:', err);
