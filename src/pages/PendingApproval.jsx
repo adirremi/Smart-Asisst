@@ -1,11 +1,19 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Clock, LogOut } from 'lucide-react';
 
-export default function PendingApproval({ profile }) {
+export default function PendingApproval({ profile, onApproved }) {
   const { logout } = useAuth();
+
+  // Auto-refresh every 15s — when admin approves, user enters the app without reloading.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      onApproved?.();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [onApproved]);
 
   return (
     <div
@@ -28,7 +36,9 @@ export default function PendingApproval({ profile }) {
             <p><strong>אזור זמן:</strong> <span dir="ltr">{profile?.timezone}</span></p>
             <p><strong>סטטוס:</strong> ממתין לאישור</p>
           </div>
-          <p className="text-xs text-slate-400">נשלחה הודעה למנהל. נודיע לך כשהחשבון יאושר.</p>
+          <p className="text-xs text-slate-400">
+            נשלחה הודעה למנהל. תקבל הודעת WhatsApp כשהחשבון יאושר.
+          </p>
           <Button variant="outline" onClick={logout} className="gap-2">
             <LogOut className="h-4 w-4" />
             יציאה

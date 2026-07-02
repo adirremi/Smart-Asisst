@@ -47,7 +47,7 @@ const AuthenticatedApp = () => {
       return <Onboarding onComplete={refreshProfile} />;
     }
     if (profile.status === 'pending') {
-      return <PendingApproval profile={profile} />;
+      return <PendingApproval profile={profile} onApproved={refreshProfile} />;
     }
     if (profile.status === 'rejected') {
       return <RejectedApproval />;

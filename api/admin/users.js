@@ -1,5 +1,6 @@
 import { serviceClient } from '../_lib/supabase.js';
 import { getUserFromRequest } from '../_lib/supabase.js';
+import { sendWasenderMessage } from '../_lib/wasender.js';
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL;
 
@@ -53,6 +54,24 @@ export default async function handler(req, res) {
         .single();
 
       if (error) throw error;
+
+      // Send welcome WhatsApp to the client when approved.
+      if (status === 'approved' && data?.phone) {
+        const appUrl = process.env.APP_URL || process.env.VITE_APP_URL || '';
+        const welcomeMessage =
+          `שלום ${data.full_name}! 🎉\n\n` +
+          `החשבון שלך אושר בהצלחה.\n` +
+          `אפשר להיכנס לאפליקציה ולהתחיל לנהל משימות ויומן.\n\n` +
+          `👉 ${appUrl}`;
+
+        try {
+          await sendWasenderMessage(data.phone, welcomeMessage);
+        } catch (whatsappErr) {
+          console.error('Welcome WhatsApp failed:', whatsappErr);
+          // Approval still succeeds even if WhatsApp fails.
+        }
+      }
+
       res.status(200).json({ success: true, profile: data });
       return;
     }
