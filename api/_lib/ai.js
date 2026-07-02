@@ -1,9 +1,15 @@
 // AI classifier: turns a Hebrew WhatsApp message into an event or task (strict JSON).
 // Provider-agnostic — set AI_PROVIDER=openai|gemini. Defaults to OpenAI gpt-4.1-mini.
 
-function buildSystemPrompt(todayFull, weekdayHe, timeZone) {
+function buildSystemPrompt(todayFull, weekdayHe, timeZone, contactNames) {
+  const contactsBlock =
+    contactNames && contactNames.length
+      ? `\nThe user's saved contacts are: ${contactNames.join(', ')}.\n`
+      : `\nThe user has no saved contacts.\n`;
+
   return `You are an intent + date-extraction engine for a tasks/calendar assistant. The user sends a WhatsApp message in Hebrew.
 Today is: ${todayFull} (${weekdayHe}). The user's local timezone is: ${timeZone}. Always interpret and output times in this local timezone.
+${contactsBlock}
 
 FIRST detect the user's INTENT, then fill the matching JSON.
 Intents:
@@ -12,7 +18,7 @@ Intents:
 - "create_multi" — the message contains SEVERAL distinct items (e.g. a task AND an event, or two tasks). Return an "items" array where each element is a full create_event or create_task object (with its own "intent" field). Only use this when there is clearly more than one item; a single item must NOT use create_multi.
 - "view" — the user ASKS what they have. Triggers: "מה יש לי", "מה האירועים", "מה המשימות", "מה יש לי היום/מחר/השבוע", "תראה לי", "מה מתוכנן".
 - "cancel" — remove/delete something. Triggers: "בטל", "תבטל", "מחק", "תמחק", "תסיר", "בטלי".
-- "update" — move/reschedule/rename an EXISTING event, OR add people to an existing event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל". ALSO: adding a person to an already-scheduled event, e.g. "תוסיף את דנה לפגישה מחר", "צרף את יוסי לאירוע X", "תוסיף גם את דנה". In that case set "query" to the existing event's identifying words and "add_attendees" to the people's names. (If the message CREATES a brand-new event that happens to include people, use create_event with "attendees" instead — not update.)
+- "update" — move/reschedule/rename an EXISTING event, OR add people to an existing event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל". ALSO: adding a person to an already-scheduled event, e.g. "תוסיף את דנה לפגישה מחר", "צרף את יוסי לאירוע X", "תוסיף גם את דנה". In that case set "query" to the existing event's identifying words and "add_attendees" to the people's names — using the SAME contacts-grounding rule as attendees (only names that match saved contacts; otherwise do not add). (If the message CREATES a brand-new event that happens to include people, use create_event with "attendees" instead — not update.)
 - "complete" — mark a task done. Triggers: "סיימתי", "עשיתי", "ביצעתי", "גמרתי", "בוצע", "עשית".
 - "unknown" — greeting, question, small talk, or gibberish that is none of the above.
 
@@ -45,11 +51,12 @@ Creation rules (only when intent is create_event / create_task):
 - If it is an action without a fixed time → create_task
 - If it IS an actionable item but you are unsure between event/task → create_task
 
-Attendees / people rule (create_event only):
-- If the message asks to include OTHER people in the event (e.g. "תוסיף את נוי איטח ואת עוז נווה", "עם דנה ויוסי", "צרף את X", "ביחד עם X"), extract their full names into an "attendees" array of strings.
-- Use the people's names EXACTLY as written; do NOT invent emails.
-- REMOVE the attendee names AND their connector words ("תוסיף את", "עם", "ביחד עם", "צרף את", "ו-") from the title. Example: "דאבל דייט בחמישי בערב תוסיף את נוי איטח ואת עוז נווה" -> title "דאבל דייט", attendees ["נוי איטח","עוז נווה"].
-- Only add "attendees" when the user clearly names people to include; otherwise omit it.
+Attendees / people rule (create_event only) — GROUNDED IN CONTACTS:
+- Only treat a name as an attendee if BOTH: (a) there is an explicit "include a person" signal ("תוסיף את", "עם", "ביחד עם", "צרף את", "יחד עם"), AND (b) the name matches ONE of the user's saved contacts listed above.
+- If a named person is NOT in the saved contacts list, DO NOT treat them as an attendee — keep the words as part of the title/description. (Better to leave a name in the title than to guess.)
+- Put matched names into an "attendees" array, using the contact's name spelling from the list.
+- REMOVE matched attendee names AND their connector words ("תוסיף את", "עם", "ביחד עם", "צרף את", "ו-") from the title. Example (if "נוי איטח" and "עוז נווה" are saved contacts): "דאבל דייט בחמישי בערב תוסיף את נוי איטח ואת עוז נווה" -> title "דאבל דייט", attendees ["נוי איטח","עוז נווה"].
+- Never invent emails. Omit "attendees" when no contact matches.
 
 Date interpretation rules:
 - All dates MUST be calculated relative to "Today is".
@@ -85,15 +92,18 @@ CRITICAL TITLE RULE (STRICT):
 
 Hebrew cleanup: keep original meaning, fix obvious typos.
 
-Return ONLY valid JSON. No explanations. Use one of:
-{ "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "attendees": ["שם מלא"] }
-{ "intent": "create_task", "title": "" }
-{ "intent": "create_multi", "items": [ { "intent": "create_task", "title": "" }, { "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "attendees": ["שם מלא"] } ] }
-{ "intent": "view", "scope": "events|tasks|both", "range": "today|tomorrow|week|date|all", "date": "YYYY-MM-DD" }
-{ "intent": "cancel", "target_type": "event|task", "query": "" }
-{ "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "", "add_attendees": ["שם מלא"] }
-{ "intent": "complete", "query": "" }
-{ "intent": "unknown" }`;
+CONFIDENCE (MUST): add a "confidence" number between 0 and 1 to every response, reflecting how sure you are about BOTH the intent and the extracted fields (dates, titles, the target of cancel/update). Be honest: use a low value (< 0.5) when the message is vague, when a cancel/update target is unclear, or when you had to guess a time/date. Use a high value (> 0.8) only when the message is explicit.
+CLARIFY (optional): when confidence is low, also add a short Hebrew "clarify" question that would resolve the ambiguity (e.g. "לאיזה אירוע להוסיף את דנה?"). Omit it when confidence is high.
+
+Return ONLY valid JSON. No explanations. Add "confidence" (and optional "clarify") to whichever shape you use:
+{ "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "attendees": ["שם מלא"], "confidence": 0.0 }
+{ "intent": "create_task", "title": "", "confidence": 0.0 }
+{ "intent": "create_multi", "items": [ { "intent": "create_task", "title": "" }, { "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "attendees": ["שם מלא"] } ], "confidence": 0.0 }
+{ "intent": "view", "scope": "events|tasks|both", "range": "today|tomorrow|week|date|all", "date": "YYYY-MM-DD", "confidence": 0.0 }
+{ "intent": "cancel", "target_type": "event|task", "query": "", "confidence": 0.0, "clarify": "" }
+{ "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "", "add_attendees": ["שם מלא"], "confidence": 0.0, "clarify": "" }
+{ "intent": "complete", "query": "", "confidence": 0.0 }
+{ "intent": "unknown", "confidence": 0.0 }`;
 }
 
 function extractJson(text) {
@@ -152,8 +162,8 @@ async function classifyGemini(systemPrompt, message) {
   return extractJson(text);
 }
 
-export async function interpretMessage({ message, timeZone, todayFull, weekdayHe }) {
-  const systemPrompt = buildSystemPrompt(todayFull, weekdayHe, timeZone);
+export async function interpretMessage({ message, timeZone, todayFull, weekdayHe, contactNames }) {
+  const systemPrompt = buildSystemPrompt(todayFull, weekdayHe, timeZone, contactNames);
   const provider = (process.env.AI_PROVIDER || 'openai').toLowerCase();
 
   const result =

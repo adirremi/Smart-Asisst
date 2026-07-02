@@ -135,6 +135,33 @@ People can also be added to an **existing** event — e.g. "תוסיף את דנ
 This routes to the `update` intent: the event is matched by name and the new
 attendees are merged into the Google event (existing attendees are preserved).
 
+### Understanding safeguards
+
+To keep the NLU robust as it grows, three safeguards work together:
+
+1. **Contact grounding** — the user's saved contact names are injected into the AI
+   prompt. A name is only treated as an attendee if it matches a real contact, so
+   unknown names stay in the title instead of being guessed as people.
+2. **Confidence gate** — the model returns a `confidence` (0–1). Actionable
+   messages below `0.5` are not executed; instead the assistant asks a short
+   clarifying question (the model's `clarify` text, or a generic fallback).
+3. **Confirm before inviting** — creating or updating an event that would send a
+   real Google invite first asks the user "כן/לא", so nobody's calendar is pinged
+   by mistake. (Multi-item messages create immediately.)
+
+### Regression test harness (golden set)
+
+Before changing the AI prompt, run the golden cases so a fix for one message
+doesn't regress another:
+
+```bash
+OPENAI_API_KEY=sk-...  npm run test:golden
+```
+
+Cases live in [`tests/golden.cases.js`](tests/golden.cases.js) and run against the
+real model with a fixed reference date, checking only the fields each case
+declares. Add every real-world miss as a new case.
+
 ## Daily WhatsApp reminders
 
 A Vercel Cron (`/api/cron/reminders` — see `vercel.json`) sends each user two daily

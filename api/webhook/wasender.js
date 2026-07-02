@@ -15,22 +15,100 @@ function isNegative(normalized) {
   return NEGATIVE.includes(normalized);
 }
 
-// Execute a previously-confirmed cancel action. Returns a confirmation message.
-async function executePendingCancel(supabase, connection, action, timeZone) {
+// A note about who was invited / who had no email, for confirmed invite actions.
+function inviteNote(action) {
+  let note = '';
+  if (action.invitedNames?.length) note += `\n👥 הוזמנו: ${action.invitedNames.join(', ')}`;
+  if (action.noEmail?.length) note += `\n⚠️ אין אימייל ל: ${action.noEmail.join(', ')} (נוספו בלי הזמנה)`;
+  if (action.notFound?.length) note += `\n❓ לא מצאתי באנשי הקשר: ${action.notFound.join(', ')}`;
+  return note;
+}
+
+// Execute a previously-confirmed action. Returns a confirmation message.
+async function executePending(supabase, connection, action, timeZone, profile) {
   if (action.type === 'cancel_task') {
     await supabase.from('tasks').delete().eq('id', action.id);
     return `בוצע! מחקתי את המשימה 🗑️\n"${action.title}"`;
   }
-  // cancel_event
-  if (action.google_event_id) {
-    await deleteGoogleEvent(supabase, connection, action.google_event_id).catch(() => {});
+
+  if (action.type === 'cancel_event') {
+    if (action.google_event_id) {
+      await deleteGoogleEvent(supabase, connection, action.google_event_id).catch(() => {});
+    }
+    await supabase.from('calendar_events').delete().eq('id', action.id);
+    if (action.start_at) {
+      const { dateStr, timeStr } = formatForUser(action.start_at, timeZone);
+      return `בוצע! ביטלתי את האירוע 🗑️\n"${action.title}" (${dateStr} ${timeStr})`;
+    }
+    return `בוצע! ביטלתי את האירוע 🗑️\n"${action.title}"`;
   }
-  await supabase.from('calendar_events').delete().eq('id', action.id);
-  if (action.start_at) {
+
+  if (action.type === 'create_event') {
+    const allNames = [...(action.names || []), ...(action.noEmail || [])];
+    const { data: inserted } = await supabase
+      .from('calendar_events')
+      .insert({
+        user_id: profile.user_id,
+        created_by: profile.email,
+        title: action.title,
+        description: '',
+        start_at: action.start_at,
+        end_at: action.end_at,
+        location: '',
+        attendees: Array.from(new Set(allNames)),
+        source: 'local',
+        all_day: false,
+      })
+      .select()
+      .single();
+
+    let htmlLink = null;
+    try {
+      const gEvent = await createGoogleEvent(supabase, connection, {
+        title: action.title,
+        start_at: action.start_at,
+        end_at: action.end_at,
+        timeZone: action.timeZone || timeZone,
+        attendees: action.attendees || [],
+      });
+      if (gEvent?.id && inserted) {
+        htmlLink = gEvent.htmlLink;
+        await supabase
+          .from('calendar_events')
+          .update({ google_event_id: gEvent.id, source: 'google' })
+          .eq('id', inserted.id);
+      }
+    } catch (err) {
+      console.error('GCal push (confirmed create) failed:', err);
+    }
+
     const { dateStr, timeStr } = formatForUser(action.start_at, timeZone);
-    return `בוצע! ביטלתי את האירוע 🗑️\n"${action.title}" (${dateStr} ${timeStr})`;
+    let msg = `בוצע! יצרתי אירוע חדש 📅\n"${action.title}"\nבתאריך ${dateStr} בשעה ${timeStr}`;
+    msg += inviteNote(action);
+    if (htmlLink) msg += `\n\n🔗 לצפייה ביומן:\n${htmlLink}`;
+    return msg;
   }
-  return `בוצע! ביטלתי את האירוע 🗑️\n"${action.title}"`;
+
+  if (action.type === 'update_event') {
+    const patch = action.patch || {};
+    if (Object.keys(patch).length) {
+      await supabase.from('calendar_events').update(patch).eq('id', action.id);
+    }
+    if (action.google_event_id) {
+      await updateGoogleEvent(supabase, connection, action.google_event_id, {
+        title: patch.title,
+        start_at: patch.start_at,
+        end_at: patch.end_at,
+        addAttendees: action.invited || [],
+        timeZone,
+      }).catch(() => {});
+    }
+    let msg = `בוצע! עדכנתי את האירוע ✏️\n"${action.title}"`;
+    msg += inviteNote(action);
+    return msg;
+  }
+
+  return 'בוצע 👍';
 }
 
 // Resolve the admin as a virtual user when the sender matches ADMIN_WHATSAPP_PHONE.
@@ -167,7 +245,7 @@ export default async function handler(req, res) {
     if (pendingFresh) {
       const tz = profile.timezone || 'Asia/Jerusalem';
       if (isAffirmative(normalizedEarly)) {
-        const msg = await executePendingCancel(supabase, connection, pendingRow.action, tz);
+        const msg = await executePending(supabase, connection, pendingRow.action, tz, profile);
         await supabase.from('whatsapp_pending').delete().eq('user_id', profile.user_id);
         await sendWasenderMessage(senderPhone, msg);
         res.status(200).json({ success: true, type: 'confirmed' });
@@ -175,7 +253,7 @@ export default async function handler(req, res) {
       }
       if (isNegative(normalizedEarly)) {
         await supabase.from('whatsapp_pending').delete().eq('user_id', profile.user_id);
-        await sendWasenderMessage(senderPhone, 'בסדר, לא ביטלתי כלום 👍');
+        await sendWasenderMessage(senderPhone, 'בסדר, ביטלתי את הפעולה 👍');
         res.status(200).json({ success: true, type: 'declined' });
         return;
       }
@@ -223,15 +301,6 @@ export default async function handler(req, res) {
     const timeZone = profile.timezone || 'Asia/Jerusalem';
     const today = nowInTimeZone(timeZone);
 
-    // Understand the user's intent.
-    const result = await interpretMessage({
-      message: text,
-      timeZone,
-      todayFull: today.full,
-      weekdayHe: today.weekdayHe,
-    });
-    const intent = result.intent;
-
     // Lazily-loaded, cached contacts list for the user (for attendee tagging).
     let contactsCache = null;
     const getContacts = async () => {
@@ -268,14 +337,43 @@ export default async function handler(req, res) {
       return out;
     };
 
-    // Short line about who was invited / who couldn't be, for an event result.
+    // Short line about who was invited / who couldn't be. Accepts a result whose
+    // `invited` may be strings (names) or {displayName} objects.
     const attendeeNote = (r) => {
+      const nameOf = (a) => (typeof a === 'string' ? a : a?.displayName || '');
+      const invited = (r?.invited || []).map(nameOf).filter(Boolean);
       let note = '';
-      if (r?.invited?.length) note += `\n👥 הוזמנו: ${r.invited.join(', ')}`;
+      if (invited.length) note += `\n👥 הוזמנו: ${invited.join(', ')}`;
       if (r?.noEmail?.length) note += `\n⚠️ אין אימייל ל: ${r.noEmail.join(', ')} (נוספו בלי הזמנה)`;
       if (r?.notFound?.length) note += `\n❓ לא מצאתי באנשי הקשר: ${r.notFound.join(', ')}`;
       return note;
     };
+
+    // Ground the AI in the user's real contact names so it only tags people who exist.
+    const contactNames = (await getContacts()).map((c) => c.name).filter(Boolean);
+
+    // Understand the user's intent.
+    const result = await interpretMessage({
+      message: text,
+      timeZone,
+      todayFull: today.full,
+      weekdayHe: today.weekdayHe,
+      contactNames,
+    });
+    const intent = result.intent;
+
+    // ---- LOW CONFIDENCE: ask a clarifying question instead of acting ----
+    // Only gate actionable intents; view/unknown fall through to their own handling.
+    const ACTIONABLE = ['create_event', 'create_task', 'create_multi', 'cancel', 'update', 'complete'];
+    const confidence = typeof result.confidence === 'number' ? result.confidence : 1;
+    if (ACTIONABLE.includes(intent) && confidence < 0.5) {
+      const clarify =
+        (result.clarify && String(result.clarify).trim()) ||
+        'לא הייתי בטוח שהבנתי. אפשר לנסח מחדש בצורה מדויקת יותר? 🙂';
+      await sendWasenderMessage(senderPhone, clarify);
+      res.status(200).json({ success: true, intent, lowConfidence: true });
+      return;
+    }
 
     // ---- VIEW: list upcoming events / open tasks ----
     if (intent === 'view') {
@@ -464,22 +562,39 @@ export default async function handler(req, res) {
       }
 
       // Merge new attendee names into the event's stored list (dedupe).
+      const existingNames = Array.isArray(match.attendees) ? match.attendees : [];
       if (att.names.length) {
-        const existing = Array.isArray(match.attendees) ? match.attendees : [];
-        patch.attendees = Array.from(new Set([...existing, ...att.names]));
+        patch.attendees = Array.from(new Set([...existingNames, ...att.names]));
+      }
+
+      // Sending real invites? Confirm first (avoid pinging someone's calendar by mistake).
+      if (att.invited.length > 0) {
+        await supabase.from('whatsapp_pending').upsert({
+          user_id: profile.user_id,
+          action: {
+            type: 'update_event',
+            id: match.id,
+            title: patch.title || match.title,
+            google_event_id: match.google_event_id || null,
+            patch,
+            invited: att.invited,
+            invitedNames: att.invited.map((a) => a.displayName),
+            noEmail: att.noEmail,
+            notFound: att.notFound,
+          },
+          created_at: new Date().toISOString(),
+        });
+        const who = att.invited.map((a) => a.displayName).join(', ');
+        await sendWasenderMessage(
+          senderPhone,
+          `להוסיף את ${who} לאירוע "${match.title}" ולשלוח להם הזמנה ליומן?\n\nהשב "כן" לאישור או "לא" לביטול.`
+        );
+        res.status(200).json({ success: true, intent, awaitingConfirm: true, kind: 'invite' });
+        return;
       }
 
       if (Object.keys(patch).length) {
         await supabase.from('calendar_events').update(patch).eq('id', match.id);
-      }
-      if (match.google_event_id) {
-        await updateGoogleEvent(supabase, connection, match.google_event_id, {
-          title: patch.title,
-          start_at: patch.start_at,
-          end_at: patch.end_at,
-          addAttendees: att.invited,
-          timeZone,
-        }).catch(() => {});
       }
 
       const rescheduled = !!patch.start_at;
@@ -636,6 +751,39 @@ export default async function handler(req, res) {
 
     // ---- CREATE EVENT ----
     if (intent === 'create_event' && result.start_datetime) {
+      // Sending real invites? Confirm before creating + inviting.
+      const attCreate = await resolveAttendees(result.attendees);
+      if (attCreate.invited.length > 0) {
+        const startUtc = zonedTimeToUtc(result.start_datetime, timeZone);
+        const duration = Number(result.duration_minutes) || 30;
+        const endUtc = new Date(startUtc.getTime() + duration * 60 * 1000);
+        const title = result.title || text;
+        const { dateStr, timeStr } = formatForUser(startUtc.toISOString(), timeZone);
+        await supabase.from('whatsapp_pending').upsert({
+          user_id: profile.user_id,
+          action: {
+            type: 'create_event',
+            title,
+            start_at: startUtc.toISOString(),
+            end_at: endUtc.toISOString(),
+            timeZone,
+            attendees: attCreate.invited,
+            names: attCreate.names,
+            invitedNames: attCreate.invited.map((a) => a.displayName),
+            noEmail: attCreate.noEmail,
+            notFound: attCreate.notFound,
+          },
+          created_at: new Date().toISOString(),
+        });
+        const who = attCreate.invited.map((a) => a.displayName).join(', ');
+        await sendWasenderMessage(
+          senderPhone,
+          `ליצור את האירוע "${title}" ב-${dateStr} בשעה ${timeStr} ולהזמין את ${who}?\n\nהשב "כן" לאישור או "לא" לביטול.`
+        );
+        res.status(200).json({ success: true, intent, awaitingConfirm: true, kind: 'invite' });
+        return;
+      }
+
       const r = await createEventItem(result);
       if (r.duplicate) {
         await sendWasenderMessage(
