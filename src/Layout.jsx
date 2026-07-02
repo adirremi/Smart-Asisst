@@ -22,7 +22,7 @@ import {
   Shield
 } from "lucide-react";
 
-const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
+import { isAdminEmail } from '@/lib/admin';
 
 const navItems = [
   { name: 'Dashboard', label: 'דשבורד', icon: LayoutDashboard },
@@ -91,7 +91,7 @@ export default function Layout({ children, currentPageName }) {
               </Link>
             );
           })}
-          {user?.email === ADMIN_EMAIL && (
+          {isAdminEmail(user?.email) && (
             <Link
               to={createPageUrl('Admin')}
               className={`

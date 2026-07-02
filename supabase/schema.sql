@@ -182,9 +182,10 @@ create table if not exists public.user_profiles (
 );
 
 drop trigger if exists set_metadata on public.user_profiles;
-create trigger set_metadata
+drop trigger if exists set_user_profile_metadata on public.user_profiles;
+create trigger set_user_profile_metadata
   before insert or update on public.user_profiles
-  for each row execute function public.set_row_metadata();
+  for each row execute function public.set_user_profile_metadata();
 
 alter table public.user_profiles enable row level security;
 
@@ -200,3 +201,15 @@ create policy "profile_insert_own" on public.user_profiles
 
 create index if not exists user_profiles_status_idx on public.user_profiles (status);
 create index if not exists user_profiles_user_idx on public.user_profiles (user_id);
+
+-- Dedicated trigger for user_profiles (no created_by column).
+create or replace function public.set_user_profile_metadata()
+returns trigger as $$
+begin
+  if tg_op = 'INSERT' and new.created_date is null then
+    new.created_date := now();
+  end if;
+  new.updated_date := now();
+  return new;
+end;
+$$ language plpgsql;

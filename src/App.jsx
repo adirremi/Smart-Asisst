@@ -12,8 +12,7 @@ import Onboarding from '@/pages/Onboarding';
 import PendingApproval from '@/pages/PendingApproval';
 import RejectedApproval from '@/pages/RejectedApproval';
 import Admin from '@/pages/Admin';
-
-const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL;
+import { isAdminEmail } from '@/lib/admin';
 
 const { Pages, Layout, mainPage } = pagesConfig;
 const mainPageKey = mainPage ?? Object.keys(Pages)[0];
@@ -25,7 +24,7 @@ const LayoutWrapper = ({ children, currentPageName }) => Layout ?
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isAuthenticated, user } = useAuth();
-  const isAdmin = user?.email === ADMIN_EMAIL;
+  const isAdmin = isAdminEmail(user?.email);
   const { data: profile, isLoading: isLoadingProfile, refreshProfile } = useProfile(user?.id);
 
   if (isLoadingAuth || (isAuthenticated && !isAdmin && isLoadingProfile)) {
