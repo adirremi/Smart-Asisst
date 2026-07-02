@@ -39,10 +39,22 @@ export default function CalendarWidget({
   const weekStart = startOfWeek(selectedDate);
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
-  const todayEvents = events.filter(event => {
+  const viewingToday = isToday(selectedDate);
+
+  // Events for the specific selected day.
+  const selectedDayEvents = events.filter(event => {
     const eventDate = new Date(event.start_at);
     return isSameDay(eventDate, selectedDate);
   }).sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+
+  // Upcoming events: from the start of today onwards (today + future).
+  const todayStart = startOfDay(new Date());
+  const upcomingEvents = events
+    .filter(event => new Date(event.start_at) >= todayStart)
+    .sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+
+  // When today is selected, show the upcoming list; otherwise the chosen day.
+  const displayEvents = viewingToday ? upcomingEvents : selectedDayEvents;
 
   const getEventsForDay = (day) => {
     return events.filter(event => isSameDay(new Date(event.start_at), day));
@@ -74,7 +86,7 @@ export default function CalendarWidget({
           <div>
             <CardTitle className="text-lg bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">לוח שנה</CardTitle>
             <Badge variant="secondary" className="font-normal text-xs bg-purple-100 text-purple-700">
-              {todayEvents.length} אירועים
+              {displayEvents.length} אירועים
             </Badge>
           </div>
         </div>
@@ -158,20 +170,22 @@ export default function CalendarWidget({
           </div>
         </div>
 
-        {/* Today's events */}
+        {/* Upcoming / selected-day events */}
         <div className="flex-1 overflow-auto">
           <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
             <Calendar className="h-4 w-4" />
-            {isToday(selectedDate) ? 'אירועים להיום' : format(selectedDate, 'EEEE, d בMMMM', { locale: he })}
+            {viewingToday ? 'אירועים קרובים' : format(selectedDate, 'EEEE, d בMMMM', { locale: he })}
           </h3>
 
-          {todayEvents.length === 0 ? (
+          {displayEvents.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
                 <Clock className="h-6 w-6 text-slate-400" />
               </div>
               <p className="text-sm font-medium text-slate-600">אין אירועים</p>
-              <p className="text-xs text-slate-400 mt-1">היום פנוי לפגישות</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {viewingToday ? 'אין אירועים קרובים' : 'היום פנוי לפגישות'}
+              </p>
               <Button 
                 variant="outline" 
                 size="sm" 
@@ -184,11 +198,12 @@ export default function CalendarWidget({
             </div>
           ) : (
             <div className="space-y-2">
-              {todayEvents.map(event => (
+              {displayEvents.map(event => (
                 <EventCard
                   key={event.id}
                   event={event}
                   compact
+                  showDate={viewingToday}
                   onEdit={onEditEvent}
                   onDelete={onDeleteEvent}
                 />

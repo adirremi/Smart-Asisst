@@ -24,9 +24,10 @@ const sourceConfig = {
   webhook: { color: "bg-gradient-to-r from-pink-100 to-pink-200 text-pink-700 border-pink-300", label: "Webhook" }
 };
 
-export default function EventCard({ event, onEdit, onDelete, compact = false }) {
+export default function EventCard({ event, onEdit, onDelete, compact = false, showDate = false }) {
   const startTime = format(new Date(event.start_at), 'HH:mm', { locale: he });
   const endTime = format(new Date(event.end_at), 'HH:mm', { locale: he });
+  const dateLabel = format(new Date(event.start_at), 'EEEE, d בMMM', { locale: he });
 
   if (compact) {
     return (
@@ -34,7 +35,10 @@ export default function EventCard({ event, onEdit, onDelete, compact = false }) 
         <div className="w-1.5 h-10 rounded-full bg-gradient-to-b from-blue-500 to-purple-500" />
         <div className="flex-1 min-w-0">
           <p className="font-medium text-sm text-slate-900 truncate">{event.title}</p>
-          <p className="text-xs text-slate-500">{startTime} - {endTime}</p>
+          <p className="text-xs text-slate-500">
+            {showDate && <span className="text-purple-600 font-medium">{dateLabel} · </span>}
+            {startTime} - {endTime}
+          </p>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
