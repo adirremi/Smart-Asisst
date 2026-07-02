@@ -123,11 +123,21 @@ the `x-webhook-secret` header or `?secret=` query param. Add `OPENAI_API_KEY`
 
 ## Daily WhatsApp reminders
 
-A Vercel Cron (`/api/cron/reminders`, every 15 min — see `vercel.json`) sends each
-user two daily WhatsApp messages **in their own local timezone**:
+A Vercel Cron (`/api/cron/reminders` — see `vercel.json`) sends each user two daily
+WhatsApp messages **in their own local timezone**:
 
 - **20:15** — their upcoming events, nicely formatted.
 - **08:45** — their open tasks for the day.
+
+Rather than polling every half hour, the cron fires only at the exact UTC times that
+map to 08:45 / 20:15 in the timezones we actually serve (two UTC variants per case to
+cover summer/winter DST). The handler re-checks each user's local clock, so the
+"wrong" DST tick is a harmless no-op. Currently configured for **Israel** and
+**California**.
+
+> **Adding a region:** when onboarding a client in a new timezone, add its two
+> morning and two evening UTC ticks to `crons` in `vercel.json`. The mapping is
+> documented at the top of `api/cron/reminders.js`.
 
 It runs across **all approved users** (plus the admin), so newly approved users are
 included automatically. Protect it with `CRON_SECRET` (Vercel Cron sends it as a

@@ -5,13 +5,22 @@ import { localMinutesOfDay, formatForUser } from '../_lib/datetime.js';
 // Daily WhatsApp reminders, sent per-user in their own local timezone:
 //   - 20:15  → upcoming events
 //   - 08:45  → today's open tasks
-// Triggered by a Vercel Cron at :15 and :45 past every hour (see vercel.json).
-// Checking each user's local clock lets it cover every timezone with just two
-// ticks per hour, and new users are picked up automatically.
+//
+// Instead of polling every 30 min, the Vercel Cron (see vercel.json) fires only
+// at the exact UTC times that map to 08:45 / 20:15 in the timezones we actually
+// serve. Two UTC variants per case cover DST (summer/winter); the local-clock
+// check below only sends at the real local target, so the "wrong" DST tick is a
+// harmless no-op. Whole-hour offsets make minutesNow land exactly on target.
+//
+//   Israel  (Asia/Jerusalem, UTC+3/+2):  morning 05:45 / 06:45   evening 17:15 / 18:15
+//   California (America/Los_Angeles, -7/-8): morning 15:45 / 16:45  evening 03:15 / 04:15
+//
+// ADD A TIMEZONE: when onboarding a client in a new region, add its two morning
+// and two evening UTC ticks to `crons` in vercel.json — nothing else changes.
 
 const EVENTS_TARGET = 20 * 60 + 15; // 20:15
 const TASKS_TARGET = 8 * 60 + 45; // 08:45
-const WINDOW = 15; // one cron tick lands exactly on each target minute
+const WINDOW = 15; // each cron tick lands exactly on the target minute
 
 function inWindow(minutesNow, target) {
   return minutesNow >= target && minutesNow < target + WINDOW;
