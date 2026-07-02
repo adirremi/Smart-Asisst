@@ -452,6 +452,42 @@ export default async function handler(req, res) {
     const normalizeTitle = (s) =>
       String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 
+    // Lazily-loaded, cached contacts list for the user (for attendee tagging).
+    let contactsCache = null;
+    const getContacts = async () => {
+      if (contactsCache) return contactsCache;
+      const { data } = await supabase
+        .from('contacts')
+        .select('name, email')
+        .eq('user_id', profile.user_id);
+      contactsCache = data || [];
+      return contactsCache;
+    };
+
+    // Resolve AI-extracted attendee NAMES to contacts.
+    // Returns { invited: [{email, displayName}], names: [matched names],
+    //           notFound: [names], noEmail: [names] }.
+    const resolveAttendees = async (names) => {
+      const out = { invited: [], names: [], notFound: [], noEmail: [] };
+      const list = (names || []).map((n) => String(n || '').trim()).filter(Boolean);
+      if (!list.length) return out;
+      const contacts = await getContacts();
+      for (const name of list) {
+        const match = findBestMatch(contacts, name, 'name');
+        if (!match) {
+          out.notFound.push(name);
+          continue;
+        }
+        out.names.push(match.name);
+        if (match.email) {
+          out.invited.push({ email: match.email, displayName: match.name });
+        } else {
+          out.noEmail.push(match.name);
+        }
+      }
+      return out;
+    };
+
     // Create one task; returns a summary object.
     const createTaskItem = async (item) => {
       const title = item.title || text;
@@ -490,6 +526,8 @@ export default async function handler(req, res) {
         return { type: 'event', duplicate: true, title, dateStr, timeStr };
       }
 
+      const att = await resolveAttendees(item.attendees);
+
       const { data: inserted } = await supabase
         .from('calendar_events')
         .insert({
@@ -500,7 +538,7 @@ export default async function handler(req, res) {
           start_at: startUtc.toISOString(),
           end_at: endUtc.toISOString(),
           location: '',
-          attendees: [],
+          attendees: att.names,
           source: 'local',
           all_day: false,
         })
@@ -514,6 +552,7 @@ export default async function handler(req, res) {
           start_at: startUtc.toISOString(),
           end_at: endUtc.toISOString(),
           timeZone,
+          attendees: att.invited,
         });
         if (gEvent?.id && inserted) {
           htmlLink = gEvent.htmlLink;
@@ -526,7 +565,26 @@ export default async function handler(req, res) {
         console.error('GCal push failed:', gErr);
       }
 
-      return { type: 'event', duplicate: false, title, dateStr, timeStr, htmlLink };
+      return {
+        type: 'event',
+        duplicate: false,
+        title,
+        dateStr,
+        timeStr,
+        htmlLink,
+        invited: att.invited.map((a) => a.displayName),
+        notFound: att.notFound,
+        noEmail: att.noEmail,
+      };
+    };
+
+    // Build a short line about who was invited / who couldn't be, for an event result.
+    const attendeeNote = (r) => {
+      let note = '';
+      if (r?.invited?.length) note += `\n👥 הוזמנו: ${r.invited.join(', ')}`;
+      if (r?.noEmail?.length) note += `\n⚠️ אין אימייל ל: ${r.noEmail.join(', ')} (הוספתי לאירוע בלי הזמנה)`;
+      if (r?.notFound?.length) note += `\n❓ לא מצאתי באנשי הקשר: ${r.notFound.join(', ')}`;
+      return note;
     };
 
     // ---- CREATE MULTI: several items in one message ----
@@ -543,7 +601,7 @@ export default async function handler(req, res) {
         if (r.type === 'event') {
           return r.duplicate
             ? `⚠️ "${r.title}" כבר קיים (${r.dateStr} ${r.timeStr})`
-            : `📅 ${r.title} — ${r.dateStr} ${r.timeStr}`;
+            : `📅 ${r.title} — ${r.dateStr} ${r.timeStr}${attendeeNote(r)}`;
         }
         return `✅ ${r.title}`;
       });
@@ -567,6 +625,7 @@ export default async function handler(req, res) {
         );
       } else {
         let msg = `היי! יצרתי אירוע חדש 📅\n"${r.title}"\nבתאריך ${r.dateStr} בשעה ${r.timeStr}`;
+        msg += attendeeNote(r);
         if (r.htmlLink) msg += `\n\n🔗 לצפייה ביומן:\n${r.htmlLink}`;
         await sendWasenderMessage(senderPhone, msg);
       }

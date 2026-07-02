@@ -7,6 +7,7 @@ import { COUNTRIES, US_STATES, resolveTimezone, formatTimezoneLabel } from '@/li
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
@@ -29,7 +30,11 @@ import {
   Calendar,
   Home,
   Clock,
-  Loader2
+  Loader2,
+  Users,
+  UserPlus,
+  Trash2,
+  Mail
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -85,6 +90,60 @@ export default function Settings() {
     } finally {
       setSavingTz(false);
     }
+  };
+
+  // ---- Contacts ("friends") that can be tagged as event attendees ----
+  const [newContact, setNewContact] = useState({ name: '', email: '', phone: '' });
+
+  const { data: contacts = [] } = useQuery({
+    queryKey: ['contacts', user?.id],
+    enabled: !!user?.id,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('name', { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const addContactMutation = useMutation({
+    mutationFn: async (contact) => {
+      const { error } = await supabase.from('contacts').insert({
+        user_id: user.id,
+        name: contact.name.trim(),
+        email: contact.email.trim() || null,
+        phone: contact.phone.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['contacts', user?.id] });
+      setNewContact({ name: '', email: '', phone: '' });
+      toast({ title: 'איש הקשר נוסף' });
+    },
+    onError: (err) => toast({ title: 'שגיאה בהוספת איש קשר', description: err.message, variant: 'destructive' }),
+  });
+
+  const deleteContactMutation = useMutation({
+    mutationFn: async (id) => {
+      const { error } = await supabase.from('contacts').delete().eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['contacts', user?.id] });
+      toast({ title: 'איש הקשר נמחק' });
+    },
+  });
+
+  const handleAddContact = () => {
+    if (!newContact.name.trim()) {
+      toast({ title: 'נא להזין שם', variant: 'destructive' });
+      return;
+    }
+    addContactMutation.mutate(newContact);
   };
 
   const { data: connections = [] } = useQuery({
@@ -235,6 +294,10 @@ export default function Settings() {
               <Calendar className="h-4 w-4" />
               אינטגרציות
             </TabsTrigger>
+            <TabsTrigger value="contacts" className="gap-2">
+              <Users className="h-4 w-4" />
+              אנשי קשר
+            </TabsTrigger>
             <TabsTrigger value="general" className="gap-2">
               <Clock className="h-4 w-4" />
               כללי
@@ -311,6 +374,108 @@ export default function Settings() {
                   שמור אזור זמן
                 </Button>
               </CardFooter>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="contacts">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shadow-lg">
+                    <Users className="h-5 w-5 text-white" />
+                  </div>
+                  <div>
+                    <CardTitle>אנשי קשר</CardTitle>
+                    <CardDescription>
+                      הוסף חברים כדי לתייג אותם באירועים דרך WhatsApp (למשל: "דאבל דייט בחמישי בערב תוסיף את נוי איטח").
+                      עם אימייל — הם יקבלו הזמנה אמיתית ליומן.
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end">
+                  <div className="space-y-1.5">
+                    <Label>שם מלא</Label>
+                    <Input
+                      value={newContact.name}
+                      onChange={(e) => setNewContact({ ...newContact, name: e.target.value })}
+                      placeholder="נוי איטח"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>אימייל (מומלץ)</Label>
+                    <Input
+                      type="email"
+                      dir="ltr"
+                      value={newContact.email}
+                      onChange={(e) => setNewContact({ ...newContact, email: e.target.value })}
+                      placeholder="noy@gmail.com"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>טלפון (אופציונלי)</Label>
+                    <Input
+                      dir="ltr"
+                      value={newContact.phone}
+                      onChange={(e) => setNewContact({ ...newContact, phone: e.target.value })}
+                      placeholder="050-0000000"
+                    />
+                  </div>
+                  <Button onClick={handleAddContact} disabled={addContactMutation.isPending} className="gap-2">
+                    {addContactMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <UserPlus className="h-4 w-4" />
+                    )}
+                    הוסף
+                  </Button>
+                </div>
+
+                <div className="space-y-2">
+                  {contacts.length === 0 ? (
+                    <div className="flex items-center gap-3 p-4 bg-slate-50 rounded-lg text-sm text-slate-500">
+                      <Users className="h-5 w-5 text-slate-400" />
+                      עדיין אין אנשי קשר. הוסף חברים למעלה.
+                    </div>
+                  ) : (
+                    contacts.map((c) => (
+                      <div
+                        key={c.id}
+                        className="flex items-center gap-3 p-3 bg-white border rounded-lg"
+                      >
+                        <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-medium">
+                          {c.name?.[0] || '?'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-slate-800 truncate">{c.name}</p>
+                          <div className="flex items-center gap-3 text-xs text-slate-500" dir="ltr">
+                            {c.email ? (
+                              <span className="flex items-center gap-1">
+                                <Mail className="h-3 w-3" />
+                                {c.email}
+                              </span>
+                            ) : (
+                              <span className="text-amber-600">ללא אימייל — לא תישלח הזמנה</span>
+                            )}
+                            {c.phone && <span>{c.phone}</span>}
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-red-500 hover:text-red-600"
+                          onClick={() => {
+                            if (confirm(`למחוק את ${c.name}?`)) deleteContactMutation.mutate(c.id);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </CardContent>
             </Card>
           </TabsContent>
 

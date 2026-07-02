@@ -45,6 +45,12 @@ Creation rules (only when intent is create_event / create_task):
 - If it is an action without a fixed time → create_task
 - If it IS an actionable item but you are unsure between event/task → create_task
 
+Attendees / people rule (create_event only):
+- If the message asks to include OTHER people in the event (e.g. "תוסיף את נוי איטח ואת עוז נווה", "עם דנה ויוסי", "צרף את X", "ביחד עם X"), extract their full names into an "attendees" array of strings.
+- Use the people's names EXACTLY as written; do NOT invent emails.
+- REMOVE the attendee names AND their connector words ("תוסיף את", "עם", "ביחד עם", "צרף את", "ו-") from the title. Example: "דאבל דייט בחמישי בערב תוסיף את נוי איטח ואת עוז נווה" -> title "דאבל דייט", attendees ["נוי איטח","עוז נווה"].
+- Only add "attendees" when the user clearly names people to include; otherwise omit it.
+
 Date interpretation rules:
 - All dates MUST be calculated relative to "Today is".
 - Phrases like "today", "tomorrow", "next Sunday", "this Sunday" MUST be converted to an absolute ISO date based on Today.
@@ -80,9 +86,9 @@ CRITICAL TITLE RULE (STRICT):
 Hebrew cleanup: keep original meaning, fix obvious typos.
 
 Return ONLY valid JSON. No explanations. Use one of:
-{ "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30 }
+{ "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "attendees": ["שם מלא"] }
 { "intent": "create_task", "title": "" }
-{ "intent": "create_multi", "items": [ { "intent": "create_task", "title": "" }, { "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30 } ] }
+{ "intent": "create_multi", "items": [ { "intent": "create_task", "title": "" }, { "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "attendees": ["שם מלא"] } ] }
 { "intent": "view", "scope": "events|tasks|both", "range": "today|tomorrow|week|date|all", "date": "YYYY-MM-DD" }
 { "intent": "cancel", "target_type": "event|task", "query": "" }
 { "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "" }

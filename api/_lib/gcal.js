@@ -16,17 +16,28 @@ export async function createGoogleEvent(supabase, connection, ev) {
     end: { dateTime: ev.end_at, timeZone },
   };
 
-  const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    }
-  );
+  // Attendees: [{ email, displayName }]. Google emails them a real invite.
+  const attendees = (ev.attendees || []).filter((a) => a && a.email);
+  if (attendees.length) {
+    body.attendees = attendees.map((a) => ({
+      email: a.email,
+      displayName: a.displayName || undefined,
+    }));
+  }
+
+  // sendUpdates=all makes Google email invitations to the attendees.
+  const url =
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events` +
+    (attendees.length ? '?sendUpdates=all' : '');
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
 
   if (!res.ok) {
     console.error('Google event create failed:', await res.text());

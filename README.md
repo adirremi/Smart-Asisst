@@ -23,7 +23,7 @@ were left almost untouched.
 ## 1. Supabase setup
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor → New query**, paste the contents of [`supabase/schema.sql`](supabase/schema.sql), and run it. This creates the tables, triggers, and RLS policies.
+2. Open **SQL Editor → New query**, paste the contents of [`supabase/schema.sql`](supabase/schema.sql), and run it. This creates the tables, triggers, and RLS policies. Then run the additional migrations the same way: [`supabase/user_profiles.sql`](supabase/user_profiles.sql), [`supabase/whatsapp_pending.sql`](supabase/whatsapp_pending.sql), and [`supabase/contacts.sql`](supabase/contacts.sql) (per-user contacts for tagging event attendees).
 3. In **Project Settings → API**, copy:
    - `Project URL` → `VITE_SUPABASE_URL` and `SUPABASE_URL`
    - `anon public` key → `VITE_SUPABASE_ANON_KEY`
@@ -120,6 +120,16 @@ the `x-webhook-secret` header or `?secret=` query param. Add `OPENAI_API_KEY`
 
 > Note: tasks and events use one shared table each with per-user `user_id` + Row
 > Level Security — no separate table per client is needed.
+
+### Tagging contacts on events
+
+Users can keep a personal contact list (**Settings → אנשי קשר**, stored in
+`contacts`). When a WhatsApp event names people to include (e.g. "דאבל דייט בחמישי
+בערב תוסיף את נוי איטח ואת עוז נווה"), the AI extracts the names, the webhook fuzzy-
+matches them to the user's contacts, and adds them as Google Calendar **attendees**.
+Contacts with an email get a real calendar invite (`sendUpdates=all`); contacts
+without an email are still noted on the event. The confirmation message reports who
+was invited, who had no email, and any names not found in the contact list.
 
 ## Daily WhatsApp reminders
 
