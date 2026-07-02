@@ -305,21 +305,50 @@ export default async function handler(req, res) {
     }
 
     // ---- CANCEL: ask for confirmation, then delete on "כן" ----
+    // Search BOTH events and tasks so a wrong target_type guess can't cause a miss.
     if (intent === 'cancel') {
-      const targetType = result.target_type || 'event';
+      const query = result.query || text;
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      if (targetType === 'task') {
-        const { data: tasks } = await supabase
-          .from('tasks')
-          .select('*')
-          .eq('user_id', profile.user_id)
-          .in('status', ['open', 'in_progress']);
-        const match = findBestMatch(tasks || [], result.query || text);
-        if (!match) {
-          await sendWasenderMessage(senderPhone, `לא מצאתי משימה שמתאימה ל"${result.query || text}" 🤔`);
-          res.status(200).json({ success: true, intent, matched: false });
-          return;
-        }
+      const { data: events } = await supabase
+        .from('calendar_events')
+        .select('*')
+        .eq('user_id', profile.user_id)
+        .gte('start_at', dayAgo)
+        .order('start_at', { ascending: true });
+
+      const { data: tasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', profile.user_id)
+        .in('status', ['open', 'in_progress']);
+
+      // Bias by the AI hint: check the hinted type first, then fall back to both.
+      const hinted = result.target_type === 'task' ? tasks : events;
+      const other = result.target_type === 'task' ? events : tasks;
+      const combined = [
+        ...(events || []).map((e) => ({ ...e, _kind: 'event' })),
+        ...(tasks || []).map((t) => ({ ...t, _kind: 'task' })),
+      ];
+
+      const match =
+        findBestMatch(hinted || [], query) ||
+        findBestMatch(other || [], query) ||
+        findBestMatch(combined, query);
+
+      if (!match) {
+        await sendWasenderMessage(
+          senderPhone,
+          `לא מצאתי אירוע או משימה שמתאימים ל"${query}" 🤔\nנסה לכתוב חלק מהשם המדויק.`
+        );
+        res.status(200).json({ success: true, intent, matched: false });
+        return;
+      }
+
+      // Decide kind: prefer explicit _kind (from combined) else infer from source list.
+      const isTask = match._kind === 'task' || (match.status !== undefined && match.start_at === undefined);
+
+      if (isTask) {
         await supabase.from('whatsapp_pending').upsert({
           user_id: profile.user_id,
           action: { type: 'cancel_task', id: match.id, title: match.title },
@@ -329,23 +358,10 @@ export default async function handler(req, res) {
           senderPhone,
           `בטוח שברצונך למחוק את המשימה?\n"${match.title}"\n\nהשב "כן" לאישור או "לא" לביטול.`
         );
-        res.status(200).json({ success: true, intent, awaitingConfirm: true });
+        res.status(200).json({ success: true, intent, awaitingConfirm: true, kind: 'task' });
         return;
       }
 
-      // Cancel an event (upcoming).
-      const { data: events } = await supabase
-        .from('calendar_events')
-        .select('*')
-        .eq('user_id', profile.user_id)
-        .gte('start_at', new Date().toISOString())
-        .order('start_at', { ascending: true });
-      const match = findBestMatch(events || [], result.query || text);
-      if (!match) {
-        await sendWasenderMessage(senderPhone, `לא מצאתי אירוע קרוב שמתאים ל"${result.query || text}" 🤔`);
-        res.status(200).json({ success: true, intent, matched: false });
-        return;
-      }
       await supabase.from('whatsapp_pending').upsert({
         user_id: profile.user_id,
         action: {
@@ -362,21 +378,22 @@ export default async function handler(req, res) {
         senderPhone,
         `בטוח שברצונך לבטל את האירוע?\n"${match.title}" (${dateStr} ${timeStr})\n\nהשב "כן" לאישור או "לא" לביטול.`
       );
-      res.status(200).json({ success: true, intent, awaitingConfirm: true });
+      res.status(200).json({ success: true, intent, awaitingConfirm: true, kind: 'event' });
       return;
     }
 
-    // ---- UPDATE: move/rename an upcoming event ----
+    // ---- UPDATE: move/rename an event ----
     if (intent === 'update') {
+      const dayAgoU = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: events } = await supabase
         .from('calendar_events')
         .select('*')
         .eq('user_id', profile.user_id)
-        .gte('start_at', new Date().toISOString())
+        .gte('start_at', dayAgoU)
         .order('start_at', { ascending: true });
       const match = findBestMatch(events || [], result.query || text);
       if (!match) {
-        await sendWasenderMessage(senderPhone, `לא מצאתי אירוע קרוב שמתאים ל"${result.query || text}" 🤔`);
+        await sendWasenderMessage(senderPhone, `לא מצאתי אירוע שמתאים ל"${result.query || text}" 🤔`);
         res.status(200).json({ success: true, intent, matched: false });
         return;
       }
