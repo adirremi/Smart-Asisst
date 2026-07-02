@@ -22,35 +22,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { 
   ArrowRight,
   CheckCircle2,
   XCircle,
   RefreshCw,
-  Key,
-  Plus,
-  Trash2,
-  Copy,
-  Eye,
-  EyeOff,
-  Settings2,
   Calendar,
-  Webhook,
   Home,
   Clock,
   Loader2
@@ -61,9 +38,6 @@ import { format } from "date-fns";
 import { he } from "date-fns/locale";
 
 export default function Settings() {
-  const [showApiKeyForm, setShowApiKeyForm] = React.useState(false);
-  const [newKeyName, setNewKeyName] = React.useState('');
-  const [visibleKeys, setVisibleKeys] = React.useState({});
   const [isConnecting, setIsConnecting] = React.useState(false);
   const [isSyncing, setIsSyncing] = React.useState(false);
   const [finishingConnect, setFinishingConnect] = React.useState(false);
@@ -119,11 +93,6 @@ export default function Settings() {
     queryFn: () => base44.entities.CalendarConnection.list(),
   });
 
-  const { data: webhookKeys = [] } = useQuery({
-    queryKey: ['webhookKeys'],
-    queryFn: () => base44.entities.WebhookKey.list(),
-  });
-
   const connection = connections[0];
 
   const updateConnectionMutation = useMutation({
@@ -141,52 +110,6 @@ export default function Settings() {
       toast({ title: "חיבור Google Calendar בוטל" });
     }
   });
-
-  const createKeyMutation = useMutation({
-    mutationFn: (data) => base44.entities.WebhookKey.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['webhookKeys'] });
-      setShowApiKeyForm(false);
-      setNewKeyName('');
-      toast({ title: "מפתח API נוצר" });
-    }
-  });
-
-  const deleteKeyMutation = useMutation({
-    mutationFn: (id) => base44.entities.WebhookKey.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['webhookKeys'] });
-      toast({ title: "מפתח API נמחק" });
-    }
-  });
-
-  const generateApiKey = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let key = 'tk_';
-    for (let i = 0; i < 32; i++) {
-      key += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return key;
-  };
-
-  const handleCreateKey = () => {
-    if (!newKeyName.trim()) return;
-    createKeyMutation.mutate({
-      name: newKeyName,
-      api_key: generateApiKey(),
-      is_active: true,
-      permissions: ['tasks', 'events', 'calendar']
-    });
-  };
-
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: "הועתק ללוח" });
-  };
-
-  const toggleKeyVisibility = (id) => {
-    setVisibleKeys(prev => ({ ...prev, [id]: !prev[id] }));
-  };
 
   // Handle the redirect back from the Google OAuth flow.
   useEffect(() => {
@@ -306,10 +229,6 @@ export default function Settings() {
             <TabsTrigger value="general" className="gap-2">
               <Clock className="h-4 w-4" />
               כללי
-            </TabsTrigger>
-            <TabsTrigger value="webhooks" className="gap-2">
-              <Webhook className="h-4 w-4" />
-              Webhooks
             </TabsTrigger>
           </TabsList>
 
@@ -527,200 +446,8 @@ export default function Settings() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="api">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>מפתחות API</CardTitle>
-                    <CardDescription>מפתחות לגישה ל-Webhook API</CardDescription>
-                  </div>
-                  <Button onClick={() => setShowApiKeyForm(true)}>
-                    <Plus className="h-4 w-4 ml-1" />
-                    מפתח חדש
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {webhookKeys.length === 0 ? (
-                  <div className="text-center py-8">
-                    <Key className="h-12 w-12 mx-auto text-slate-300 mb-3" />
-                    <p className="text-slate-500">אין מפתחות API</p>
-                    <p className="text-sm text-slate-400 mt-1">צור מפתח לגישה ל-Webhook</p>
-                  </div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>שם</TableHead>
-                        <TableHead>מפתח</TableHead>
-                        <TableHead>סטטוס</TableHead>
-                        <TableHead>שימוש אחרון</TableHead>
-                        <TableHead></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {webhookKeys.map(key => (
-                        <TableRow key={key.id}>
-                          <TableCell className="font-medium">{key.name}</TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <code className="text-xs bg-slate-100 px-2 py-1 rounded">
-                                {visibleKeys[key.id] ? key.api_key : '••••••••••••••••'}
-                              </code>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                onClick={() => toggleKeyVisibility(key.id)}
-                              >
-                                {visibleKeys[key.id] ? (
-                                  <EyeOff className="h-3.5 w-3.5" />
-                                ) : (
-                                  <Eye className="h-3.5 w-3.5" />
-                                )}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                onClick={() => copyToClipboard(key.api_key)}
-                              >
-                                <Copy className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={key.is_active ? "default" : "secondary"}>
-                              {key.is_active ? 'פעיל' : 'מושבת'}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {key.last_used_at ? (
-                              format(new Date(key.last_used_at), 'dd/MM HH:mm', { locale: he })
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-red-600"
-                              onClick={() => {
-                                if (confirm('למחוק את המפתח?')) {
-                                  deleteKeyMutation.mutate(key.id);
-                                }
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-
-                <div className="mt-6 p-4 bg-slate-50 rounded-lg">
-                  <h4 className="font-medium mb-2">שימוש ב-Webhook</h4>
-                  <p className="text-sm text-slate-600 mb-3">
-                    שלח בקשות POST לנקודת הקצה עם מפתח ה-API בגוף הבקשה
-                  </p>
-                  <pre className="text-xs bg-slate-900 text-slate-100 p-3 rounded overflow-x-auto" dir="ltr">
-{`POST /functions/webhookHandler
-
-{
-  "apiKey": "YOUR_API_KEY",
-  "action": "task.create",
-  "payload": {
-    "title": "משימה חדשה",
-    "priority": "high"
-  }
-}`}
-                  </pre>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="webhooks">
-            <div className="grid gap-6 md:grid-cols-2">
-              <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => window.location.href = createPageUrl('TaskWebhook')}>
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
-                      <Webhook className="h-6 w-6 text-white" />
-                    </div>
-                    <div>
-                      <CardTitle>Task Webhook</CardTitle>
-                      <CardDescription>יצירת משימות דרך HTTP</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-slate-600 mb-4">
-                    שלח בקשות POST כדי ליצור משימות חדשות מכל מערכת חיצונית
-                  </p>
-                  <Button variant="outline" className="w-full" onClick={(e) => { e.stopPropagation(); window.location.href = createPageUrl('TaskWebhook'); }}>
-                    פתח דף Webhook
-                    <ArrowRight className="h-4 w-4 mr-2" />
-                  </Button>
-                </CardContent>
-              </Card>
-
-              <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => window.location.href = createPageUrl('CalendarWebhook')}>
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-lg">
-                      <Webhook className="h-6 w-6 text-white" />
-                    </div>
-                    <div>
-                      <CardTitle>Calendar Webhook</CardTitle>
-                      <CardDescription>סנכרון אירועי יומן</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-slate-600 mb-4">
-                    סנכרן אירועים מ-Google Calendar ואחזר אירועים קרובים
-                  </p>
-                  <Button variant="outline" className="w-full" onClick={(e) => { e.stopPropagation(); window.location.href = createPageUrl('CalendarWebhook'); }}>
-                    פתח דף Webhook
-                    <ArrowRight className="h-4 w-4 mr-2" />
-                  </Button>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
           </Tabs>
           </main>
-
-      <Dialog open={showApiKeyForm} onOpenChange={setShowApiKeyForm}>
-        <DialogContent dir="rtl">
-          <DialogHeader>
-            <DialogTitle>מפתח API חדש</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>שם המפתח</Label>
-              <Input
-                value={newKeyName}
-                onChange={(e) => setNewKeyName(e.target.value)}
-                placeholder="לדוגמה: Production, Zapier, etc."
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowApiKeyForm(false)}>
-              ביטול
-            </Button>
-            <Button onClick={handleCreateKey} disabled={!newKeyName.trim()}>
-              צור מפתח
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Toaster />
     </div>
