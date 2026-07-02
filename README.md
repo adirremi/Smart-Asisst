@@ -131,6 +131,10 @@ Contacts with an email get a real calendar invite (`sendUpdates=all`); contacts
 without an email are still noted on the event. The confirmation message reports who
 was invited, who had no email, and any names not found in the contact list.
 
+People can also be added to an **existing** event — e.g. "תוסיף את דנה לפגישה מחר".
+This routes to the `update` intent: the event is matched by name and the new
+attendees are merged into the Google event (existing attendees are preserved).
+
 ## Daily WhatsApp reminders
 
 A Vercel Cron (`/api/cron/reminders` — see `vercel.json`) sends each user two daily

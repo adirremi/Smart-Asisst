@@ -12,7 +12,7 @@ Intents:
 - "create_multi" — the message contains SEVERAL distinct items (e.g. a task AND an event, or two tasks). Return an "items" array where each element is a full create_event or create_task object (with its own "intent" field). Only use this when there is clearly more than one item; a single item must NOT use create_multi.
 - "view" — the user ASKS what they have. Triggers: "מה יש לי", "מה האירועים", "מה המשימות", "מה יש לי היום/מחר/השבוע", "תראה לי", "מה מתוכנן".
 - "cancel" — remove/delete something. Triggers: "בטל", "תבטל", "מחק", "תמחק", "תסיר", "בטלי".
-- "update" — move/reschedule/rename an event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל".
+- "update" — move/reschedule/rename an EXISTING event, OR add people to an existing event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל". ALSO: adding a person to an already-scheduled event, e.g. "תוסיף את דנה לפגישה מחר", "צרף את יוסי לאירוע X", "תוסיף גם את דנה". In that case set "query" to the existing event's identifying words and "add_attendees" to the people's names. (If the message CREATES a brand-new event that happens to include people, use create_event with "attendees" instead — not update.)
 - "complete" — mark a task done. Triggers: "סיימתי", "עשיתי", "ביצעתי", "גמרתי", "בוצע", "עשית".
 - "unknown" — greeting, question, small talk, or gibberish that is none of the above.
 
@@ -91,7 +91,7 @@ Return ONLY valid JSON. No explanations. Use one of:
 { "intent": "create_multi", "items": [ { "intent": "create_task", "title": "" }, { "intent": "create_event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "attendees": ["שם מלא"] } ] }
 { "intent": "view", "scope": "events|tasks|both", "range": "today|tomorrow|week|date|all", "date": "YYYY-MM-DD" }
 { "intent": "cancel", "target_type": "event|task", "query": "" }
-{ "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "" }
+{ "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "", "add_attendees": ["שם מלא"] }
 { "intent": "complete", "query": "" }
 { "intent": "unknown" }`;
 }

@@ -232,6 +232,51 @@ export default async function handler(req, res) {
     });
     const intent = result.intent;
 
+    // Lazily-loaded, cached contacts list for the user (for attendee tagging).
+    let contactsCache = null;
+    const getContacts = async () => {
+      if (contactsCache) return contactsCache;
+      const { data } = await supabase
+        .from('contacts')
+        .select('name, email')
+        .eq('user_id', profile.user_id);
+      contactsCache = data || [];
+      return contactsCache;
+    };
+
+    // Resolve AI-extracted attendee NAMES to contacts.
+    // Returns { invited: [{email, displayName}], names: [matched names],
+    //           notFound: [names], noEmail: [names] }.
+    const resolveAttendees = async (names) => {
+      const out = { invited: [], names: [], notFound: [], noEmail: [] };
+      const list = (names || []).map((n) => String(n || '').trim()).filter(Boolean);
+      if (!list.length) return out;
+      const contacts = await getContacts();
+      for (const name of list) {
+        const match = findBestMatch(contacts, name, 'name');
+        if (!match) {
+          out.notFound.push(name);
+          continue;
+        }
+        out.names.push(match.name);
+        if (match.email) {
+          out.invited.push({ email: match.email, displayName: match.name });
+        } else {
+          out.noEmail.push(match.name);
+        }
+      }
+      return out;
+    };
+
+    // Short line about who was invited / who couldn't be, for an event result.
+    const attendeeNote = (r) => {
+      let note = '';
+      if (r?.invited?.length) note += `\n👥 הוזמנו: ${r.invited.join(', ')}`;
+      if (r?.noEmail?.length) note += `\n⚠️ אין אימייל ל: ${r.noEmail.join(', ')} (נוספו בלי הזמנה)`;
+      if (r?.notFound?.length) note += `\n❓ לא מצאתי באנשי הקשר: ${r.notFound.join(', ')}`;
+      return note;
+    };
+
     // ---- VIEW: list upcoming events / open tasks ----
     if (intent === 'view') {
       const scope = result.scope || 'events';
@@ -408,24 +453,43 @@ export default async function handler(req, res) {
         patch.end_at = newEnd.toISOString();
       }
 
-      if (Object.keys(patch).length === 0) {
+      // Attendees to add to the existing event (e.g. "תוסיף את דנה לפגישה מחר").
+      const att = await resolveAttendees(result.add_attendees);
+      const addingAttendees = att.names.length > 0 || att.notFound.length > 0;
+
+      if (Object.keys(patch).length === 0 && !addingAttendees) {
         await sendWasenderMessage(senderPhone, `לא הבנתי מה לעדכן באירוע "${match.title}". נסה למשל: "תעביר את ${match.title} למחר בשמונה בערב".`);
         res.status(200).json({ success: true, intent, matched: true, changed: false });
         return;
       }
 
-      await supabase.from('calendar_events').update(patch).eq('id', match.id);
+      // Merge new attendee names into the event's stored list (dedupe).
+      if (att.names.length) {
+        const existing = Array.isArray(match.attendees) ? match.attendees : [];
+        patch.attendees = Array.from(new Set([...existing, ...att.names]));
+      }
+
+      if (Object.keys(patch).length) {
+        await supabase.from('calendar_events').update(patch).eq('id', match.id);
+      }
       if (match.google_event_id) {
         await updateGoogleEvent(supabase, connection, match.google_event_id, {
           title: patch.title,
           start_at: patch.start_at,
           end_at: patch.end_at,
+          addAttendees: att.invited,
           timeZone,
         }).catch(() => {});
       }
-      const finalStart = patch.start_at || match.start_at;
-      const { dateStr, timeStr } = formatForUser(finalStart, timeZone);
-      await sendWasenderMessage(senderPhone, `עודכן! ✏️\n"${patch.title || match.title}"\nעכשיו ב-${dateStr} ${timeStr}`);
+
+      const rescheduled = !!patch.start_at;
+      let msg = `עודכן! ✏️\n"${patch.title || match.title}"`;
+      if (rescheduled) {
+        const { dateStr, timeStr } = formatForUser(patch.start_at, timeZone);
+        msg += `\nעכשיו ב-${dateStr} ${timeStr}`;
+      }
+      msg += attendeeNote(att);
+      await sendWasenderMessage(senderPhone, msg);
       res.status(200).json({ success: true, intent, matched: true, changed: true });
       return;
     }
@@ -451,42 +515,6 @@ export default async function handler(req, res) {
 
     const normalizeTitle = (s) =>
       String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
-
-    // Lazily-loaded, cached contacts list for the user (for attendee tagging).
-    let contactsCache = null;
-    const getContacts = async () => {
-      if (contactsCache) return contactsCache;
-      const { data } = await supabase
-        .from('contacts')
-        .select('name, email')
-        .eq('user_id', profile.user_id);
-      contactsCache = data || [];
-      return contactsCache;
-    };
-
-    // Resolve AI-extracted attendee NAMES to contacts.
-    // Returns { invited: [{email, displayName}], names: [matched names],
-    //           notFound: [names], noEmail: [names] }.
-    const resolveAttendees = async (names) => {
-      const out = { invited: [], names: [], notFound: [], noEmail: [] };
-      const list = (names || []).map((n) => String(n || '').trim()).filter(Boolean);
-      if (!list.length) return out;
-      const contacts = await getContacts();
-      for (const name of list) {
-        const match = findBestMatch(contacts, name, 'name');
-        if (!match) {
-          out.notFound.push(name);
-          continue;
-        }
-        out.names.push(match.name);
-        if (match.email) {
-          out.invited.push({ email: match.email, displayName: match.name });
-        } else {
-          out.noEmail.push(match.name);
-        }
-      }
-      return out;
-    };
 
     // Create one task; returns a summary object.
     const createTaskItem = async (item) => {
@@ -576,15 +604,6 @@ export default async function handler(req, res) {
         notFound: att.notFound,
         noEmail: att.noEmail,
       };
-    };
-
-    // Build a short line about who was invited / who couldn't be, for an event result.
-    const attendeeNote = (r) => {
-      let note = '';
-      if (r?.invited?.length) note += `\n👥 הוזמנו: ${r.invited.join(', ')}`;
-      if (r?.noEmail?.length) note += `\n⚠️ אין אימייל ל: ${r.noEmail.join(', ')} (הוספתי לאירוע בלי הזמנה)`;
-      if (r?.notFound?.length) note += `\n❓ לא מצאתי באנשי הקשר: ${r.notFound.join(', ')}`;
-      return note;
     };
 
     // ---- CREATE MULTI: several items in one message ----
