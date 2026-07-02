@@ -1,36 +1,55 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseConfigError } from '@/lib/supabase';
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(!supabaseConfigError);
 
   useEffect(() => {
+    if (supabaseConfigError || !supabase) {
+      setIsLoadingAuth(false);
+      return;
+    }
+
     let active = true;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!active) return;
-      setUser(session?.user ?? null);
-      setIsLoadingAuth(false);
-    });
+    const finishLoading = () => {
+      if (active) setIsLoadingAuth(false);
+    };
+
+    // Don't show a blank page forever if Supabase is unreachable.
+    const timeout = setTimeout(finishLoading, 8000);
+
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        if (!active) return;
+        setUser(session?.user ?? null);
+        finishLoading();
+      })
+      .catch((err) => {
+        console.error('Auth session error:', err);
+        finishLoading();
+      });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
-      setIsLoadingAuth(false);
+      finishLoading();
     });
 
     return () => {
       active = false;
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    if (supabase) await supabase.auth.signOut();
     setUser(null);
   };
 
@@ -40,7 +59,6 @@ export const AuthProvider = ({ children }) => {
         user,
         isAuthenticated: !!user,
         isLoadingAuth,
-        // Kept for backwards compatibility with components that referenced these.
         isLoadingPublicSettings: false,
         authError: null,
         appPublicSettings: null,

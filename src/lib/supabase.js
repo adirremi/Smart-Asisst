@@ -3,17 +3,18 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  // Surface a clear message during local dev instead of a cryptic runtime error.
-  console.error(
-    'Missing Supabase env vars. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env.local'
-  );
-}
+export const supabaseConfigError =
+  !supabaseUrl || !supabaseAnonKey
+    ? 'חסרים משתני סביבה: VITE_SUPABASE_URL ו-VITE_SUPABASE_ANON_KEY. הוסף אותם ב-Vercel ועשה Redeploy.'
+    : null;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+// Avoid crashing the whole app at import time if env vars are missing at build time.
+export const supabase = supabaseConfigError
+  ? null
+  : createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    });

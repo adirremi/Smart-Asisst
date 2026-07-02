@@ -16,6 +16,7 @@ import GoogleCalendarStatus from "../components/dashboard/GoogleCalendarStatus";
 import GlobalSearch from "../components/common/GlobalSearch";
 import TaskForm from "../components/tasks/TaskForm";
 import EventForm from "../components/calendar/EventForm";
+import { createPageUrl } from "@/utils";
 
 export default function Dashboard() {
   const [user, setUser] = React.useState(null);
