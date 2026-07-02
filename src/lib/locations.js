@@ -20,6 +20,17 @@ export const US_STATES = [
   { code: 'CO', label: 'קולורדו', timezone: 'America/Denver' },
 ];
 
+// Curated timezone list for the admin per-client picker.
+export const TIMEZONE_OPTIONS = [
+  { tz: 'Asia/Jerusalem', label: 'ישראל' },
+  { tz: 'America/New_York', label: 'ניו יורק / איסטרן (ET)' },
+  { tz: 'America/Detroit', label: 'מישיגן (ET)' },
+  { tz: 'America/Chicago', label: 'שיקגו / סנטרל (CT)' },
+  { tz: 'America/Denver', label: 'דנוור / מאונטן (MT)' },
+  { tz: 'America/Phoenix', label: 'אריזונה (MST)' },
+  { tz: 'America/Los_Angeles', label: 'קליפורניה / פסיפיק (PT)' },
+];
+
 export function resolveTimezone(countryCode, stateCode) {
   if (countryCode === 'IL') return 'Asia/Jerusalem';
   const state = US_STATES.find((s) => s.code === stateCode);

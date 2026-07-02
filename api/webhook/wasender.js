@@ -234,9 +234,14 @@ export default async function handler(req, res) {
 
     // ---- VIEW: list upcoming events / open tasks ----
     if (intent === 'view') {
-      const scope = result.scope || 'both';
+      const scope = result.scope || 'events';
       const range = result.range || 'today';
       const { startUtc, endUtc } = viewRange(range, result.date, timeZone);
+      const rangeLabels = { today: 'להיום', tomorrow: 'למחר', week: 'לשבוע הקרוב', all: 'הקרובים' };
+      const rangeLabel =
+        range === 'date' && result.date
+          ? `לתאריך ${result.date.split('-').reverse().join('.')}`
+          : rangeLabels[range] || '';
       const parts = [];
 
       if (scope === 'events' || scope === 'both') {
@@ -253,9 +258,9 @@ export default async function handler(req, res) {
             const { dateStr, timeStr } = formatForUser(ev.start_at, timeZone);
             return `${i + 1}. ${ev.title}, ${dateStr} ${timeStr}`;
           });
-          parts.push(`📅 אירועים:\n${lines.join('\n')}`);
+          parts.push(`📅 אירועים ${rangeLabel}:\n${lines.join('\n')}`);
         } else if (scope === 'events') {
-          parts.push('📅 אין אירועים בטווח המבוקש.');
+          parts.push(`📅 אין לך אירועים ${rangeLabel} 🎉`);
         }
       }
 

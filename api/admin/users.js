@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     }
 
     const supabase = serviceClient();
-    const { action, userId, status } =
+    const { action, userId, status, timezone } =
       typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
 
     // GET — list users (default: pending)
@@ -32,6 +32,23 @@ export default async function handler(req, res) {
         .order('created_date', { ascending: false });
       if (error) throw error;
       res.status(200).json({ users: data || [] });
+      return;
+    }
+
+    // POST set_timezone — admin fixes a client's local timezone
+    if (req.method === 'POST' && action === 'set_timezone') {
+      if (!userId || !timezone) {
+        res.status(400).json({ error: 'userId and timezone required' });
+        return;
+      }
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .update({ timezone })
+        .eq('user_id', userId)
+        .select()
+        .single();
+      if (error) throw error;
+      res.status(200).json({ success: true, profile: data });
       return;
     }
 

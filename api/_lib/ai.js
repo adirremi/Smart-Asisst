@@ -15,7 +15,15 @@ Intents:
 - "complete" — mark a task done. Triggers: "סיימתי", "עשיתי", "ביצעתי", "גמרתי", "בוצע", "עשית".
 - "unknown" — greeting, question, small talk, or gibberish that is none of the above.
 
-For "view": set "scope" to "events" | "tasks" | "both", and "range" to "today" | "tomorrow" | "week" | "date" | "all". If a specific date/weekday is mentioned, use range "date" and put the absolute "date" as "YYYY-MM-DD" (relative to Today). Default range is "today"; if it only says "משימות" without time, use range "all".
+For "view":
+- Set "scope":
+  - "events" — the DEFAULT for questions about the schedule/calendar, e.g. "מה יש לי", "מה יש לי מחר", "מה מתוכנן", "מה יש לי ביום שני", "יש לי משהו מחר?".
+  - "tasks" — ONLY if the message explicitly mentions tasks/to-dos: "משימות", "מטלות", "מה עליי לעשות", "מה המשימות שלי".
+  - "both" — ONLY if the user explicitly asks for everything, e.g. "מה הכל יש לי", "אירועים ומשימות".
+- Set "range" to "today" | "tomorrow" | "week" | "date" | "all":
+  - Default is "today". "מחר" -> "tomorrow". "השבוע" -> "week".
+  - If a specific weekday ("יום שני הבא", "ביום ראשון") or an explicit date is mentioned, use "date" and compute the absolute "date" as "YYYY-MM-DD" relative to Today (next future occurrence for a bare weekday).
+  - If scope is "tasks" with no time mentioned, use "all".
 For "cancel"/"complete"/"update": put in "query" the core subject words that identify the item (WITHOUT time/date words, WITHOUT the trigger verb). For "update", optionally add "new_start_datetime" ("YYYY-MM-DD HH:MM:SS") and/or "new_title".
 
 Hebrew spelled-time rules (MUST):
