@@ -165,14 +165,7 @@ export default function Dashboard() {
   const [isSyncing, setIsSyncing] = React.useState(false);
 
   const handleConnectGoogle = () => {
-    toast({ 
-      title: "חיבור Google Calendar",
-      description: "עבור להגדרות כדי לחבר את Google Calendar",
-      action: {
-        label: "עבור להגדרות",
-        onClick: () => window.location.href = createPageUrl("Settings")
-      }
-    });
+    window.location.href = createPageUrl('Settings');
   };
 
   const handleSync = async () => {

@@ -1,3 +1,4 @@
+import React from "react";
 import { useToast } from "@/components/ui/use-toast";
 import {
   Toast,
@@ -5,8 +6,22 @@ import {
   ToastDescription,
   ToastProvider,
   ToastTitle,
+  ToastAction,
   ToastViewport,
 } from "@/components/ui/toast";
+
+function renderToastAction(action) {
+  if (!action) return null;
+  if (React.isValidElement(action)) return action;
+  if (typeof action === 'object' && action.label) {
+    return (
+      <ToastAction altText={action.label} onClick={action.onClick}>
+        {action.label}
+      </ToastAction>
+    );
+  }
+  return null;
+}
 
 export function Toaster() {
   const { toasts } = useToast();
@@ -19,10 +34,12 @@ export function Toaster() {
             <div className="grid gap-1">
               {title && <ToastTitle>{title}</ToastTitle>}
               {description && (
-                <ToastDescription>{description}</ToastDescription>
+                <ToastDescription>
+                  {typeof description === 'string' ? description : String(description)}
+                </ToastDescription>
               )}
             </div>
-            {action}
+            {renderToastAction(action)}
             <ToastClose />
           </Toast>
         );
