@@ -21,10 +21,13 @@ NEW RULE (MUST): If the message includes a date (absolute or relative like "מח
 Your task: Decide whether the message describes:
 1) a calendar event
 2) a task
+3) unknown (not an actionable task or event)
 Rules:
 - If a date AND a specific time are mentioned → event
 - If it is an action without a fixed time → task
-- If unsure → task
+- If the message is NOT actionable — e.g. a greeting, a question, small talk,
+  an emoji-only message, or gibberish that is neither a task nor an event → unknown
+- If it IS an actionable item but you are unsure between task/event → task
 
 Date interpretation rules:
 - All dates MUST be calculated relative to "Today is".
@@ -59,7 +62,8 @@ Hebrew cleanup: keep original meaning, fix obvious typos.
 
 Return ONLY valid JSON. No explanations.
 Event format: { "type": "event", "title": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30 }
-Task format: { "type": "task", "title": "" }`;
+Task format: { "type": "task", "title": "" }
+Unknown format: { "type": "unknown" }`;
 }
 
 function extractJson(text) {
@@ -128,8 +132,8 @@ export async function classifyMessage({ message, timeZone, todayFull, weekdayHe 
       : await classifyOpenAI(systemPrompt, message);
 
   if (!result || !result.type) {
-    // Fallback: treat as a plain task using the raw message.
-    return { type: 'task', title: message.trim().slice(0, 200) };
+    // Couldn't parse a valid classification — treat as unrecognized.
+    return { type: 'unknown' };
   }
   return result;
 }

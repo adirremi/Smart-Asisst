@@ -101,6 +101,45 @@ export default async function handler(req, res) {
       return;
     }
 
+    // --- Special cases handled before the AI ---
+    const siteUrl =
+      process.env.APP_URL || process.env.VITE_APP_URL || `https://${req.headers.host}`;
+    const normalized = text.trim().toLowerCase().replace(/[!?.,"'`~׃׀|]/g, '');
+    const words = normalized.split(/\s+/).filter(Boolean);
+
+    const GREETING_WORDS = [
+      'היי', 'הי', 'שלום', 'אהלן', 'הלו', 'אלו', 'hey', 'hello', 'hi', 'yo', 'hola',
+    ];
+    const GREETING_PHRASES = ['בוקר טוב', 'ערב טוב', 'מה קורה', 'מה נשמע', 'מה המצב'];
+    const SITE_WORDS = [
+      'אתר', 'קישור', 'לינק', 'site', 'link', 'website', 'דשבורד', 'dashboard', 'אפליקציה', 'app',
+    ];
+
+    const isGreeting =
+      GREETING_PHRASES.includes(normalized) ||
+      GREETING_WORDS.includes(normalized) ||
+      (words.length <= 2 && words.some((w) => GREETING_WORDS.includes(w)));
+    const isSiteRequest = SITE_WORDS.some((k) => words.includes(k));
+
+    if (isGreeting || isSiteRequest) {
+      await sendWasenderMessage(
+        senderPhone,
+        `היי ${profile.full_name || ''}! 👋\nהנה הקישור לאתר שלך:\n${siteUrl}\n\nאפשר גם לשלוח לי כאן משימה או אירוע ואוסיף אותם עבורך אוטומטית.`
+      );
+      res.status(200).json({ success: true, type: 'greeting' });
+      return;
+    }
+
+    // Require at least two words so there's enough context to understand.
+    if (words.length < 2) {
+      await sendWasenderMessage(
+        senderPhone,
+        `היי! כדי שאבין אותך צריך לפחות שתי מילים 🙂\nלמשל: "מחר בעשר פגישה עם דנה" או "לשלם חשבונות".`
+      );
+      res.status(200).json({ success: true, type: 'too-short' });
+      return;
+    }
+
     const timeZone = profile.timezone || 'Asia/Jerusalem';
     const today = nowInTimeZone(timeZone);
 
@@ -111,6 +150,25 @@ export default async function handler(req, res) {
       todayFull: today.full,
       weekdayHe: today.weekdayHe,
     });
+
+    // Message that isn't a task or an event — tell the user and alert the admin.
+    if (result.type === 'unknown' || (result.type !== 'event' && result.type !== 'task')) {
+      await sendWasenderMessage(
+        senderPhone,
+        `היי! לא הצלחתי לזהות את הבקשה שלך 🤔\nנסה לנסח מחדש - למשל משימה ("לשלם חשבונות") או אירוע עם זמן ("מחר בעשר פגישה עם דנה").`
+      );
+
+      const adminPhone = (process.env.ADMIN_WHATSAPP_PHONE || '').split(',')[0].trim();
+      if (adminPhone && !phonesMatch(adminPhone, senderPhone)) {
+        await sendWasenderMessage(
+          adminPhone,
+          `⚠️ הודעה מלקוח לא זוהתה\nלקוח: ${profile.full_name || ''} (${profile.phone || senderPhone})\nההודעה: "${text}"\nלא זוהתה כמשימה או אירוע.`
+        ).catch(() => {});
+      }
+
+      res.status(200).json({ success: true, type: 'unknown' });
+      return;
+    }
 
     // Fetch the user's Google Calendar connection (if any).
     const { data: connections } = await supabase
