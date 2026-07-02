@@ -101,9 +101,28 @@ export default async function handler(req, res) {
       return;
     }
 
-    // --- Special cases handled before the AI ---
     const siteUrl =
       process.env.APP_URL || process.env.VITE_APP_URL || `https://${req.headers.host}`;
+
+    // Fetch the user's Google Calendar connection.
+    const { data: connections } = await supabase
+      .from('calendar_connections')
+      .select('*')
+      .eq('user_id', profile.user_id)
+      .limit(1);
+    const connection = connections?.[0];
+
+    // CRITICAL GATE: the client must connect their Google Calendar first.
+    if (!connection) {
+      await sendWasenderMessage(
+        senderPhone,
+        `היי ${profile.full_name || ''}! 👋\nלפני שמתחילים צריך לחבר את יומן ה-Google שלך.\nהיכנס לכאן, התחבר עם Gmail וחבר את היומן:\n${siteUrl}\n\nאחרי החיבור פשוט שלח לי משימה או אירוע ואטפל בזה 🙂`
+      );
+      res.status(200).json({ success: true, type: 'needs-connection' });
+      return;
+    }
+
+    // --- Special cases handled before the AI ---
     const normalized = text.trim().toLowerCase().replace(/[!?.,"'`~׃׀|]/g, '');
     const words = normalized.split(/\s+/).filter(Boolean);
 
@@ -169,14 +188,6 @@ export default async function handler(req, res) {
       res.status(200).json({ success: true, type: 'unknown' });
       return;
     }
-
-    // Fetch the user's Google Calendar connection (if any).
-    const { data: connections } = await supabase
-      .from('calendar_connections')
-      .select('*')
-      .eq('user_id', profile.user_id)
-      .limit(1);
-    const connection = connections?.[0];
 
     if (result.type === 'event' && result.start_datetime) {
       const startUtc = zonedTimeToUtc(result.start_datetime, timeZone);
