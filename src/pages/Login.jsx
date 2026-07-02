@@ -45,9 +45,10 @@ export default function Login() {
 
   const handleGoogleLogin = async () => {
     setError(null);
+    const redirectTo = import.meta.env.VITE_APP_URL || window.location.origin;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo },
     });
     if (error) setError(error.message);
   };
