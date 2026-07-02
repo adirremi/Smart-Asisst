@@ -5,6 +5,34 @@ import { zonedTimeToUtc, nowInTimeZone, formatForUser, viewRange } from '../_lib
 import { createGoogleEvent, deleteGoogleEvent, updateGoogleEvent } from '../_lib/gcal.js';
 import { findBestMatch } from '../_lib/match.js';
 
+const AFFIRMATIVE = ['כן', 'כ', 'אישור', 'אשר', 'מאשר', 'בטח', 'בסדר', 'אוקי', 'אוקיי', 'yes', 'y', 'ok', 'okay', 'sure', 'confirm'];
+const NEGATIVE = ['לא', 'ביטול', 'בטל', 'עזוב', 'no', 'n', 'cancel', 'stop'];
+
+function isAffirmative(normalized) {
+  return AFFIRMATIVE.includes(normalized);
+}
+function isNegative(normalized) {
+  return NEGATIVE.includes(normalized);
+}
+
+// Execute a previously-confirmed cancel action. Returns a confirmation message.
+async function executePendingCancel(supabase, connection, action, timeZone) {
+  if (action.type === 'cancel_task') {
+    await supabase.from('tasks').delete().eq('id', action.id);
+    return `בוצע! מחקתי את המשימה 🗑️\n"${action.title}"`;
+  }
+  // cancel_event
+  if (action.google_event_id) {
+    await deleteGoogleEvent(supabase, connection, action.google_event_id).catch(() => {});
+  }
+  await supabase.from('calendar_events').delete().eq('id', action.id);
+  if (action.start_at) {
+    const { dateStr, timeStr } = formatForUser(action.start_at, timeZone);
+    return `בוצע! ביטלתי את האירוע 🗑️\n"${action.title}" (${dateStr} ${timeStr})`;
+  }
+  return `בוצע! ביטלתי את האירוע 🗑️\n"${action.title}"`;
+}
+
 // Resolve the admin as a virtual user when the sender matches ADMIN_WHATSAPP_PHONE.
 // The admin skips onboarding (no user_profiles row), so we look up their auth user
 // by ADMIN_EMAIL and force the Jerusalem timezone.
@@ -123,6 +151,38 @@ export default async function handler(req, res) {
       return;
     }
 
+    const normalizedEarly = text.trim().toLowerCase().replace(/[!?.,"'`~׃׀|]/g, '');
+
+    // --- Pending confirmation (e.g. a delete awaiting yes/no) ---
+    const { data: pendingRow } = await supabase
+      .from('whatsapp_pending')
+      .select('*')
+      .eq('user_id', profile.user_id)
+      .maybeSingle();
+
+    const pendingFresh =
+      pendingRow &&
+      Date.now() - new Date(pendingRow.created_at).getTime() < 15 * 60 * 1000;
+
+    if (pendingFresh) {
+      const tz = profile.timezone || 'Asia/Jerusalem';
+      if (isAffirmative(normalizedEarly)) {
+        const msg = await executePendingCancel(supabase, connection, pendingRow.action, tz);
+        await supabase.from('whatsapp_pending').delete().eq('user_id', profile.user_id);
+        await sendWasenderMessage(senderPhone, msg);
+        res.status(200).json({ success: true, type: 'confirmed' });
+        return;
+      }
+      if (isNegative(normalizedEarly)) {
+        await supabase.from('whatsapp_pending').delete().eq('user_id', profile.user_id);
+        await sendWasenderMessage(senderPhone, 'בסדר, לא ביטלתי כלום 👍');
+        res.status(200).json({ success: true, type: 'declined' });
+        return;
+      }
+      // Any other message discards the stale pending action and continues normally.
+      await supabase.from('whatsapp_pending').delete().eq('user_id', profile.user_id);
+    }
+
     // --- Special cases handled before the AI ---
     const normalized = text.trim().toLowerCase().replace(/[!?.,"'`~׃׀|]/g, '');
     const words = normalized.split(/\s+/).filter(Boolean);
@@ -239,7 +299,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ---- CANCEL: delete an event or task ----
+    // ---- CANCEL: ask for confirmation, then delete on "כן" ----
     if (intent === 'cancel') {
       const targetType = result.target_type || 'event';
 
@@ -255,9 +315,16 @@ export default async function handler(req, res) {
           res.status(200).json({ success: true, intent, matched: false });
           return;
         }
-        await supabase.from('tasks').delete().eq('id', match.id);
-        await sendWasenderMessage(senderPhone, `בוצע! מחקתי את המשימה 🗑️\n"${match.title}"`);
-        res.status(200).json({ success: true, intent, matched: true });
+        await supabase.from('whatsapp_pending').upsert({
+          user_id: profile.user_id,
+          action: { type: 'cancel_task', id: match.id, title: match.title },
+          created_at: new Date().toISOString(),
+        });
+        await sendWasenderMessage(
+          senderPhone,
+          `בטוח שברצונך למחוק את המשימה?\n"${match.title}"\n\nהשב "כן" לאישור או "לא" לביטול.`
+        );
+        res.status(200).json({ success: true, intent, awaitingConfirm: true });
         return;
       }
 
@@ -274,13 +341,23 @@ export default async function handler(req, res) {
         res.status(200).json({ success: true, intent, matched: false });
         return;
       }
-      if (match.google_event_id) {
-        await deleteGoogleEvent(supabase, connection, match.google_event_id).catch(() => {});
-      }
-      await supabase.from('calendar_events').delete().eq('id', match.id);
+      await supabase.from('whatsapp_pending').upsert({
+        user_id: profile.user_id,
+        action: {
+          type: 'cancel_event',
+          id: match.id,
+          title: match.title,
+          google_event_id: match.google_event_id || null,
+          start_at: match.start_at,
+        },
+        created_at: new Date().toISOString(),
+      });
       const { dateStr, timeStr } = formatForUser(match.start_at, timeZone);
-      await sendWasenderMessage(senderPhone, `בוצע! ביטלתי את האירוע 🗑️\n"${match.title}" (${dateStr} ${timeStr})`);
-      res.status(200).json({ success: true, intent, matched: true });
+      await sendWasenderMessage(
+        senderPhone,
+        `בטוח שברצונך לבטל את האירוע?\n"${match.title}" (${dateStr} ${timeStr})\n\nהשב "כן" לאישור או "לא" לביטול.`
+      );
+      res.status(200).json({ success: true, intent, awaitingConfirm: true });
       return;
     }
 

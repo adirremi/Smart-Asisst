@@ -42,11 +42,14 @@ Date interpretation rules:
 - NEVER use past dates. If the calculated date is in the past, move it to the next valid future date.
 
 Numeric time interpretation rules:
-- "בבוקר" -> AM (e.g., "7 בבוקר" -> 07:00)
-- "בצהריים" -> 12:00–14:00 (e.g., "1 בצהריים" -> 13:00)
-- "אחר הצהריים" -> 15:00–18:00
-- "בערב" -> add 12 if hour < 12 (e.g. "7 בערב" -> 19:00)
-- "בלילה" -> PM (e.g. "10 בלילה" -> 22:00)
+- If the number is ALREADY 13–23, it is already a 24-hour time — keep it AS-IS and do NOT add 12.
+  A time-of-day word only confirms it. E.g. "14 בצהריים" -> 14:00, "15 בצהריים" -> 15:00, "19 בערב" -> 19:00.
+- Otherwise (hour 1–12), apply the time-of-day word:
+  - "בבוקר" -> AM (e.g., "7 בבוקר" -> 07:00)
+  - "בצהריים" -> 12:00–14:00 (e.g., "1 בצהריים" -> 13:00)
+  - "אחר הצהריים" -> 15:00–18:00
+  - "בערב" -> add 12 if hour < 12 (e.g. "7 בערב" -> 19:00)
+  - "בלילה" -> PM (e.g. "10 בלילה" -> 22:00)
 - NEVER ignore the time-of-day word if it exists.
 
 Time-of-day without a numeric time (treat as EVENT, default time):
