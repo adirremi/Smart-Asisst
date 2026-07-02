@@ -32,17 +32,31 @@ export async function runSync(supabase, userId) {
     .limit(1);
   const userTimeZone = profileRows?.[0]?.timezone || 'Asia/Jerusalem';
 
-  const calendarId = connection.default_calendar_id || 'primary';
+  let calendarId = connection.default_calendar_id || 'primary';
   const timeMin = new Date();
   timeMin.setMonth(timeMin.getMonth() - 1);
   const timeMax = new Date();
   timeMax.setMonth(timeMax.getMonth() + 3);
 
-  const calendarResponse = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?` +
-      `timeMin=${timeMin.toISOString()}&timeMax=${timeMax.toISOString()}&singleEvents=true&orderBy=startTime`,
-    { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
-  );
+  const fetchEvents = (calId) =>
+    fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events?` +
+        `timeMin=${timeMin.toISOString()}&timeMax=${timeMax.toISOString()}&singleEvents=true&orderBy=startTime`,
+      { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+    );
+
+  let calendarResponse = await fetchEvents(calendarId);
+
+  // A wrong/deleted calendar id returns 404 — fall back to the primary calendar
+  // and self-heal the stored value so future syncs work.
+  if (calendarResponse.status === 404 && calendarId !== 'primary') {
+    calendarId = 'primary';
+    await supabase
+      .from('calendar_connections')
+      .update({ default_calendar_id: 'primary' })
+      .eq('id', connection.id);
+    calendarResponse = await fetchEvents(calendarId);
+  }
 
   if (!calendarResponse.ok) {
     const details = await calendarResponse.text();

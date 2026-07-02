@@ -7,7 +7,6 @@ import { COUNTRIES, US_STATES, resolveTimezone, formatTimezoneLabel } from '@/li
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
@@ -94,6 +93,16 @@ export default function Settings() {
   });
 
   const connection = connections[0];
+
+  // The user's real Google calendars (for a safe dropdown instead of free text).
+  const { data: googleCalendars = [] } = useQuery({
+    queryKey: ['googleCalendars', connection?.id],
+    enabled: !!connection,
+    queryFn: async () => {
+      const { data } = await base44.functions.invoke('listGoogleCalendars', {});
+      return data?.calendars || [];
+    },
+  });
 
   const updateConnectionMutation = useMutation({
     mutationFn: ({ id, data }) => base44.entities.CalendarConnection.update(id, data),
@@ -368,18 +377,34 @@ export default function Settings() {
                       </div>
 
                       <div className="space-y-2">
-                        <Label>מזהה יומן</Label>
-                        <Input
-                          value={connection.default_calendar_id}
-                          onChange={(e) => 
-                            updateConnectionMutation.mutate({ 
-                              id: connection.id, 
-                              data: { ...connection, default_calendar_id: e.target.value } 
+                        <Label>יומן לסנכרון</Label>
+                        <Select
+                          value={connection.default_calendar_id || 'primary'}
+                          onValueChange={(v) =>
+                            updateConnectionMutation.mutate({
+                              id: connection.id,
+                              data: { ...connection, default_calendar_id: v },
                             })
                           }
-                          placeholder="primary"
-                        />
-                        <p className="text-xs text-slate-500">השאר "primary" ליומן הראשי</p>
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="primary">יומן ראשי (primary)</SelectItem>
+                            {googleCalendars
+                              .filter((c) => c.id !== 'primary')
+                              .map((c) => (
+                                <SelectItem key={c.id} value={c.id}>
+                                  {c.summary}
+                                  {c.primary ? ' (ראשי)' : ''}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-slate-500">
+                          בחר את היומן לסנכרון. ברירת המחדל היא היומן הראשי.
+                        </p>
                       </div>
 
                       {connection.last_sync_at && (
