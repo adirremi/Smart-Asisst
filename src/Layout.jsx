@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 
 import { isAdminEmail } from '@/lib/admin';
+import MobileNav from '@/components/common/MobileNav';
 
 const navItems = [
   { name: 'Dashboard', label: 'דשבורד', icon: LayoutDashboard },
@@ -54,7 +55,15 @@ export default function Layout({ children, currentPageName }) {
   const showLayout = !pagesWithOwnHeader.includes(currentPageName);
 
   if (!showLayout) {
-    return <div dir="rtl">{children}</div>;
+    return (
+      <div dir="rtl" className="min-h-screen">
+        <div className="pb-24 lg:pb-0">{children}</div>
+        <MobileNav
+          currentPageName={currentPageName}
+          isAdmin={isAdminEmail(user?.email)}
+        />
+      </div>
+    );
   }
 
   return (

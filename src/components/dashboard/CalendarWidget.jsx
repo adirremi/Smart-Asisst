@@ -47,10 +47,10 @@ export default function CalendarWidget({
     return isSameDay(eventDate, selectedDate);
   }).sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
 
-  // Upcoming events: from the start of today onwards (today + future).
-  const todayStart = startOfDay(new Date());
+  // Upcoming events: strictly in the future (already-passed events are hidden).
+  const now = new Date();
   const upcomingEvents = events
-    .filter(event => new Date(event.start_at) >= todayStart)
+    .filter(event => new Date(event.start_at) >= now)
     .sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
 
   // When today is selected, show the upcoming list; otherwise the chosen day.

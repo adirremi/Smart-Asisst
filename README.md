@@ -120,3 +120,15 @@ the `x-webhook-secret` header or `?secret=` query param. Add `OPENAI_API_KEY`
 
 > Note: tasks and events use one shared table each with per-user `user_id` + Row
 > Level Security — no separate table per client is needed.
+
+## Daily WhatsApp reminders
+
+A Vercel Cron (`/api/cron/reminders`, every 15 min — see `vercel.json`) sends each
+user two daily WhatsApp messages **in their own local timezone**:
+
+- **20:15** — their upcoming events, nicely formatted.
+- **08:45** — their open tasks for the day.
+
+It runs across **all approved users** (plus the admin), so newly approved users are
+included automatically. Protect it with `CRON_SECRET` (Vercel Cron sends it as a
+Bearer token). Requires a Vercel plan that allows sub-daily crons.

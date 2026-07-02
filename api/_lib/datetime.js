@@ -67,6 +67,24 @@ export function nowInTimeZone(timeZone) {
   };
 }
 
+// Minutes since local midnight in the given timezone (0..1439).
+export function localMinutesOfDay(timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+    .formatToParts(new Date())
+    .reduce((acc, p) => {
+      acc[p.type] = p.value;
+      return acc;
+    }, {});
+  let hour = parseInt(parts.hour, 10);
+  if (hour === 24) hour = 0; // some environments render midnight as 24
+  return hour * 60 + parseInt(parts.minute, 10);
+}
+
 // Human-friendly Hebrew date + time for confirmation messages.
 export function formatForUser(isoUtc, timeZone) {
   const date = new Date(isoUtc);
