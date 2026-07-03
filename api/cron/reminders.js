@@ -15,15 +15,48 @@ import { localMinutesOfDay, formatForUser } from '../_lib/datetime.js';
 //   Israel  (Asia/Jerusalem, UTC+3/+2):  morning 05:45 / 06:45   evening 17:15 / 18:15
 //   California (America/Los_Angeles, -7/-8): morning 15:45 / 16:45  evening 03:15 / 04:15
 //
-// ADD A TIMEZONE: when onboarding a client in a new region, add its two morning
-// and two evening UTC ticks to `crons` in vercel.json — nothing else changes.
+// ADD A TIMEZONE: add primary + backup morning/evening UTC ticks in vercel.json.
+// reminder_sent table dedupes so backup ticks never double-send.
 
 const EVENTS_TARGET = 20 * 60 + 15; // 20:15
 const TASKS_TARGET = 8 * 60 + 45; // 08:45
-const WINDOW = 15; // each cron tick lands exactly on the target minute
+// Wider window + backup cron ticks (vercel.json) so a slightly late Vercel run
+// still delivers; dedup in reminder_sent prevents double-sends.
+const WINDOW = 30;
 
 function inWindow(minutesNow, target) {
   return minutesNow >= target && minutesNow < target + WINDOW;
+}
+
+function localDateInTz(timeZone) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
+    new Date()
+  );
+}
+
+async function alreadySent(supabase, userId, kind, localDate) {
+  const { data, error } = await supabase
+    .from('reminder_sent')
+    .select('user_id')
+    .eq('user_id', userId)
+    .eq('kind', kind)
+    .eq('local_date', localDate)
+    .maybeSingle();
+  if (error) {
+    console.warn('reminder_sent check failed — run supabase/reminder_sent.sql:', error.message);
+    return false;
+  }
+  return !!data;
+}
+
+async function markSent(supabase, userId, kind, localDate) {
+  const { error } = await supabase.from('reminder_sent').upsert({
+    user_id: userId,
+    kind,
+    local_date: localDate,
+    sent_at: new Date().toISOString(),
+  });
+  if (error) console.warn('reminder_sent mark failed:', error.message);
 }
 
 async function getAdminRecipient(supabase) {
@@ -119,18 +152,29 @@ export default async function handler(req, res) {
       recipients.push(admin);
     }
 
-    const results = { events: 0, tasks: 0, checked: recipients.length };
+    const results = { events: 0, tasks: 0, checked: recipients.length, skipped: 0, utc: new Date().toISOString() };
 
     for (const r of recipients) {
       if (!r.phone || !r.timezone || !r.user_id) continue;
       const minutesNow = localMinutesOfDay(r.timezone);
+      const localDate = localDateInTz(r.timezone);
 
       try {
         if (inWindow(minutesNow, EVENTS_TARGET)) {
-          if (await sendEventsReminder(supabase, r)) results.events += 1;
+          if (await alreadySent(supabase, r.user_id, 'events', localDate)) {
+            results.skipped += 1;
+          } else if (await sendEventsReminder(supabase, r)) {
+            await markSent(supabase, r.user_id, 'events', localDate);
+            results.events += 1;
+          }
         }
         if (inWindow(minutesNow, TASKS_TARGET)) {
-          if (await sendTasksReminder(supabase, r)) results.tasks += 1;
+          if (await alreadySent(supabase, r.user_id, 'tasks', localDate)) {
+            results.skipped += 1;
+          } else if (await sendTasksReminder(supabase, r)) {
+            await markSent(supabase, r.user_id, 'tasks', localDate);
+            results.tasks += 1;
+          }
         }
       } catch (err) {
         console.error(`Reminder failed for ${r.user_id}:`, err);

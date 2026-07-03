@@ -170,11 +170,11 @@ WhatsApp messages **in their own local timezone**:
 - **20:15** — their upcoming events, nicely formatted.
 - **08:45** — their open tasks for the day.
 
-Rather than polling every half hour, the cron fires only at the exact UTC times that
-map to 08:45 / 20:15 in the timezones we actually serve (two UTC variants per case to
-cover summer/winter DST). The handler re-checks each user's local clock, so the
-"wrong" DST tick is a harmless no-op. Currently configured for **Israel** and
-**California**.
+Rather than polling every half hour, the cron fires at UTC times that map to 08:45 /
+20:15 in the timezones we serve (Israel + California), with **backup ticks** a few
+minutes later in case Vercel runs late. A `reminder_sent` table (see
+[`supabase/reminder_sent.sql`](supabase/reminder_sent.sql)) ensures each user gets
+at most one tasks message and one events message per local day.
 
 > **Adding a region:** when onboarding a client in a new timezone, add its two
 > morning and two evening UTC ticks to `crons` in `vercel.json`. The mapping is
