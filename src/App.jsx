@@ -8,6 +8,7 @@ import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import { useProfile } from '@/hooks/useProfile';
 import Login from '@/pages/Login';
+import Marketing from '@/pages/Marketing';
 import Onboarding from '@/pages/Onboarding';
 import PendingApproval from '@/pages/PendingApproval';
 import RejectedApproval from '@/pages/RejectedApproval';
@@ -37,7 +38,12 @@ const AuthenticatedApp = () => {
   }
 
   if (!isAuthenticated) {
-    return <Login />;
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<Marketing />} />
+      </Routes>
+    );
   }
 
   // Admin bypasses onboarding / approval gate
@@ -74,6 +80,7 @@ const AuthenticatedApp = () => {
       {isAdmin && (
         <Route path="/Admin" element={<Admin />} />
       )}
+      <Route path="/Marketing" element={<Marketing />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );
