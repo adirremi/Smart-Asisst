@@ -108,6 +108,51 @@ async function executePending(supabase, connection, action, timeZone, profile) {
     return msg;
   }
 
+  if (action.type === 'convert_task_to_event') {
+    await supabase.from('tasks').delete().eq('id', action.taskId);
+
+    const { data: inserted } = await supabase
+      .from('calendar_events')
+      .insert({
+        user_id: profile.user_id,
+        created_by: profile.email,
+        title: action.title,
+        description: '',
+        start_at: action.start_at,
+        end_at: action.end_at,
+        location: '',
+        attendees: [],
+        source: 'local',
+        all_day: false,
+      })
+      .select()
+      .single();
+
+    let htmlLink = null;
+    try {
+      const gEvent = await createGoogleEvent(supabase, connection, {
+        title: action.title,
+        start_at: action.start_at,
+        end_at: action.end_at,
+        timeZone: action.timeZone || timeZone,
+      });
+      if (gEvent?.id && inserted) {
+        htmlLink = gEvent.htmlLink;
+        await supabase
+          .from('calendar_events')
+          .update({ google_event_id: gEvent.id, source: 'google' })
+          .eq('id', inserted.id);
+      }
+    } catch (err) {
+      console.error('GCal push (convert task) failed:', err);
+    }
+
+    const { dateStr, timeStr } = formatForUser(action.start_at, timeZone);
+    let msg = `בוצע! הפכתי את המשימה לאירוע 📅\n"${action.title}"\n${dateStr} ${timeStr}`;
+    if (htmlLink) msg += `\n\n🔗 לצפייה ביומן:\n${htmlLink}`;
+    return msg;
+  }
+
   return 'בוצע 👍';
 }
 
@@ -364,7 +409,7 @@ export default async function handler(req, res) {
 
     // ---- LOW CONFIDENCE: ask a clarifying question instead of acting ----
     // Only gate actionable intents; view/unknown fall through to their own handling.
-    const ACTIONABLE = ['create_event', 'create_task', 'create_multi', 'cancel', 'update', 'complete'];
+    const ACTIONABLE = ['create_event', 'create_task', 'create_multi', 'cancel', 'update', 'complete', 'convert_task_to_event'];
     const confidence = typeof result.confidence === 'number' ? result.confidence : 1;
     if (ACTIONABLE.includes(intent) && confidence < 0.5) {
       const clarify =
@@ -444,6 +489,60 @@ export default async function handler(req, res) {
       await supabase.from('tasks').update({ status: 'done' }).eq('id', match.id);
       await sendWasenderMessage(senderPhone, `מעולה! סימנתי כבוצע ✅\n"${match.title}"`);
       res.status(200).json({ success: true, intent, matched: true });
+      return;
+    }
+
+    // ---- CONVERT: turn an open task into a calendar event (confirm first) ----
+    if (intent === 'convert_task_to_event') {
+      if (!result.start_datetime) {
+        await sendWasenderMessage(
+          senderPhone,
+          'לאיזה זמן להעביר את המשימה ליומן? 🤔\nלמשל: "תשנה את המשימה להתקשר לאמא לאירוע היום בערב".'
+        );
+        res.status(200).json({ success: true, intent, matched: false, reason: 'no_time' });
+        return;
+      }
+
+      const { data: tasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', profile.user_id)
+        .in('status', ['open', 'in_progress']);
+
+      const match = findBestMatch(tasks || [], result.query || text);
+      if (!match) {
+        await sendWasenderMessage(
+          senderPhone,
+          `לא מצאתי משימה פתוחה שמתאימה ל"${result.query || text}" 🤔\nנסה לכתוב חלק מהשם המדויק.`
+        );
+        res.status(200).json({ success: true, intent, matched: false });
+        return;
+      }
+
+      const title = (result.new_title && String(result.new_title).trim()) || match.title;
+      const startUtc = zonedTimeToUtc(result.start_datetime, timeZone);
+      const duration = Number(result.duration_minutes) || 30;
+      const endUtc = new Date(startUtc.getTime() + duration * 60 * 1000);
+      const { dateStr, timeStr } = formatForUser(startUtc.toISOString(), timeZone);
+
+      await supabase.from('whatsapp_pending').upsert({
+        user_id: profile.user_id,
+        action: {
+          type: 'convert_task_to_event',
+          taskId: match.id,
+          title,
+          start_at: startUtc.toISOString(),
+          end_at: endUtc.toISOString(),
+          timeZone,
+        },
+        created_at: new Date().toISOString(),
+      });
+
+      await sendWasenderMessage(
+        senderPhone,
+        `להפוך את המשימה לאירוע?\n"${match.title}" → אירוע ב-${dateStr} ${timeStr}\n(המשימה תימחק מהרשימה)\n\nהשב "כן" לאישור או "לא" לביטול.`
+      );
+      res.status(200).json({ success: true, intent, awaitingConfirm: true });
       return;
     }
 

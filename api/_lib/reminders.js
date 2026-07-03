@@ -103,6 +103,8 @@ export async function countUpcomingEvents(supabase, userId) {
   return count || 0;
 }
 
+export const EVENTS_REMINDER_LIMIT = 8;
+
 export async function sendEventsReminder(supabase, r) {
   const nowIso = new Date().toISOString();
   const { data: events } = await supabase
@@ -111,7 +113,7 @@ export async function sendEventsReminder(supabase, r) {
     .eq('user_id', r.user_id)
     .gte('start_at', nowIso)
     .order('start_at', { ascending: true })
-    .limit(10);
+    .limit(EVENTS_REMINDER_LIMIT);
 
   if (!events?.length) return false;
 

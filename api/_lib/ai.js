@@ -18,7 +18,8 @@ Intents:
 - "create_multi" — the message contains SEVERAL distinct items (e.g. a task AND an event, or two tasks). Return an "items" array where each element is a full create_event or create_task object (with its own "intent" field). Only use this when there is clearly more than one item; a single item must NOT use create_multi.
 - "view" — the user ASKS what they have. Triggers: "מה יש לי", "מה האירועים", "מה המשימות", "מה יש לי היום/מחר/השבוע", "תראה לי", "מה מתוכנן".
 - "cancel" — remove/delete something. Triggers: "בטל", "תבטל", "מחק", "תמחק", "תסיר", "בטלי".
-- "update" — move/reschedule/rename an EXISTING event, OR add people to an existing event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל". ALSO: adding a person to an already-scheduled event, e.g. "תוסיף את דנה לפגישה מחר", "צרף את יוסי לאירוע X", "תוסיף גם את דנה". In that case set "query" to the existing event's identifying words and "add_attendees" to the people's names — using the SAME contacts-grounding rule as attendees (only names that match saved contacts; otherwise do not add). (If the message CREATES a brand-new event that happens to include people, use create_event with "attendees" instead — not update.)
+- "update" — move/reschedule/rename an EXISTING **event** (already in the calendar), OR add people to an existing event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל" when referring to an **event**. ALSO: adding a person to an already-scheduled event, e.g. "תוסיף את דנה לפגישה מחר". Set "query" to the event's identifying words and optionally "add_attendees". Do NOT use "update" to convert a **task** into an event — use "convert_task_to_event" instead.
+- "convert_task_to_event" — turn an EXISTING **open task** into a calendar event at a specific time. Triggers: "תשנה את המשימה", "הפוך את המשימה לאירוע", "תהפוך לאירוע", "שים ביומן", "תעביר ליומן", "תוסיף ליומן", "תשנה ... לאירוע", "תעשה מאירוע את המשימה". MUST include when/when (start_datetime). Set "query" to words that identify the task (without time/date). Use the task's title as the event title unless the user gives a new one ("new_title"). Do NOT use for brand-new items (use create_event) or rescheduling events (use update).
 - "complete" — mark a task done. Triggers: "סיימתי", "עשיתי", "ביצעתי", "גמרתי", "בוצע", "עשית".
 - "unknown" — greeting, question, small talk, or gibberish that is none of the above.
 
@@ -31,7 +32,8 @@ For "view":
   - Default is "today". "מחר" -> "tomorrow". "השבוע" -> "week".
   - If a specific weekday ("יום שני הבא", "ביום ראשון") or an explicit date is mentioned, use "date" and compute the absolute "date" as "YYYY-MM-DD" relative to Today (next future occurrence for a bare weekday).
   - If scope is "tasks" with no time mentioned, use "all".
-For "cancel"/"complete"/"update": put in "query" the core subject words that identify the item (WITHOUT time/date words, WITHOUT the trigger verb). For "update", optionally add "new_start_datetime" ("YYYY-MM-DD HH:MM:SS") and/or "new_title".
+For "cancel"/"complete"/"update"/"convert_task_to_event": put in "query" the core subject words that identify the item (WITHOUT time/date words, WITHOUT the trigger verb). For "update", optionally add "new_start_datetime" and/or "new_title". For "convert_task_to_event", "start_datetime" is required.
+For "update" with "add_attendees": use the SAME contacts-grounding rule as create_event attendees.
 
 Hebrew spelled-time rules (MUST):
 - If a time is written in Hebrew words (e.g., "בחמש", "בשבע", "בעשר", "באחת", "בשמונה וחצי") treat it as a SPECIFIC time.
@@ -48,8 +50,10 @@ NEW RULE (MUST): If the message includes a date (absolute or relative like "מח
 
 Creation rules (only when intent is create_event / create_task):
 - If a date AND a specific time are mentioned → create_event
-- If it is an action without a fixed time → create_task
-- If it IS an actionable item but you are unsure between event/task → create_task
+- If the message has an action AND a schedule signal (מחר, היום, weekday, בערב, בבוקר, בצהריים, בשעה X, numeric time) → create_event (NOT create_task). Example: "להתקשר לאמא היום בערב" → create_event at 20:00, NOT create_task.
+- If it is an action without any schedule/time signal → create_task
+- If unsure between event/task AND there is ANY time or date hint → create_event
+- If unsure with NO time/date at all → create_task
 
 Attendees / people rule (create_event only) — GROUNDED IN CONTACTS:
 - Only treat a name as an attendee if BOTH: (a) there is an explicit "include a person" signal ("תוסיף את", "עם", "ביחד עם", "צרף את", "יחד עם"), AND (b) the name matches ONE of the user's saved contacts listed above.
@@ -102,6 +106,7 @@ Return ONLY valid JSON. No explanations. Add "confidence" (and optional "clarify
 { "intent": "view", "scope": "events|tasks|both", "range": "today|tomorrow|week|date|all", "date": "YYYY-MM-DD", "confidence": 0.0 }
 { "intent": "cancel", "target_type": "event|task", "query": "", "confidence": 0.0, "clarify": "" }
 { "intent": "update", "target_type": "event", "query": "", "new_start_datetime": "YYYY-MM-DD HH:MM:SS", "new_title": "", "add_attendees": ["שם מלא"], "confidence": 0.0, "clarify": "" }
+{ "intent": "convert_task_to_event", "query": "", "start_datetime": "YYYY-MM-DD HH:MM:SS", "duration_minutes": 30, "new_title": "", "confidence": 0.0, "clarify": "" }
 { "intent": "complete", "query": "", "confidence": 0.0 }
 { "intent": "unknown", "confidence": 0.0 }`;
 }

@@ -89,8 +89,18 @@ export const CASES = [
     expect: { intent: 'create_multi', itemsAtLeast: 2 },
   },
   {
-    name: 'time-of-day word without number -> default evening',
-    message: 'מחר בערב אסיפת הורים',
+    name: 'action with evening schedule is event not task',
+    message: 'להתקשר לאמא היום בערב',
     expect: { intent: 'create_event', timeEndsWith: '20:00:00' },
+  },
+  {
+    name: 'convert existing task to event',
+    message: 'תשנה את המשימה להתקשר לאמא לאירוע היום בערב',
+    expect: { intent: 'convert_task_to_event', timeEndsWith: '20:00:00' },
+  },
+  {
+    name: 'reschedule event stays update not convert',
+    message: 'תעביר את הפגישה עם דנה למחר בשמונה בערב',
+    expect: { intent: 'update' },
   },
 ];
