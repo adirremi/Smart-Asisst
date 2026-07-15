@@ -108,4 +108,9 @@ export const CASES = [
     message: '7:30 בבוקר מתיחות\nשמונה וחצי תחילת עבודה\nעשר הפסקת צהריים\n12 וחצי אימון\nבערב מסעדה',
     expect: { intent: 'create_multi', itemsAtLeast: 5 },
   },
+  {
+    name: 'schedule with shared "מחר" header applies to all',
+    message: 'מחר\nשבע בבוקר עם דוני בדיקות דם\n12 אצל אמיר במשרד\n9 בבוקר אימון\n10 חזרה על החומר\nבערב מפגש צוות',
+    expect: { intent: 'create_multi', itemsAtLeast: 5 },
+  },
 ];
