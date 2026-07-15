@@ -834,15 +834,17 @@ export default async function handler(req, res) {
         if (r.type === 'event') {
           return r.duplicate
             ? `⚠️ "${r.title}" כבר קיים (${r.dateStr} ${r.timeStr})`
-            : `📅 ${r.title} — ${r.dateStr} ${r.timeStr}${attendeeNote(r)}`;
+            : `🕒 ${r.timeStr} — ${r.title}${attendeeNote(r)}`;
         }
         return `✅ ${r.title}`;
       });
-      const links = results
-        .filter((r) => r.htmlLink)
-        .map((r) => `🔗 לצפייה ב"${r.title}":\n${r.htmlLink}`);
-      let msg = `היי! הוספתי עבורך:\n${lines.join('\n')}`;
-      if (links.length) msg += `\n\n${links.join('\n\n')}`;
+      // For a multi-item message (e.g. a daily schedule) send one clean summary
+      // without per-event calendar links, per product preference.
+      const allEvents = results.every((r) => r.type === 'event');
+      const header = allEvents
+        ? 'היי! הכנסתי את האירועים הבאים ליומן:'
+        : 'היי! הוספתי עבורך:';
+      const msg = `${header}\n${lines.join('\n')}`;
       await sendWasenderMessage(senderPhone, msg);
       res.status(200).json({ success: true, intent, count: results.length });
       return;

@@ -103,4 +103,9 @@ export const CASES = [
     message: 'תעביר את הפגישה עם דנה למחר בשמונה בערב',
     expect: { intent: 'update' },
   },
+  {
+    name: 'daily schedule -> multi events',
+    message: '7:30 בבוקר מתיחות\nשמונה וחצי תחילת עבודה\nעשר הפסקת צהריים\n12 וחצי אימון\nבערב מסעדה',
+    expect: { intent: 'create_multi', itemsAtLeast: 5 },
+  },
 ];

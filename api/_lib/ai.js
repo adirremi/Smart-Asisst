@@ -16,6 +16,7 @@ Intents:
 - "create_event" — schedule something with a time/date (see rules below).
 - "create_task" — an actionable to-do without a fixed time.
 - "create_multi" — the message contains SEVERAL distinct items (e.g. a task AND an event, or two tasks). Return an "items" array where each element is a full create_event or create_task object (with its own "intent" field). Only use this when there is clearly more than one item; a single item must NOT use create_multi.
+  - A DAILY SCHEDULE counts as create_multi: several lines (often separated by new lines) where each line has a time + an activity, e.g. "7:30 בבוקר מתיחות / שמונה וחצי תחילת עבודה / עשר הפסקת צהריים / 12 וחצי אימון / בערב מסעדה". Turn EACH line into its own create_event with its own start_datetime (same date = today unless a date is stated). Keep the original order.
 - "view" — the user ASKS what they have. Triggers: "מה יש לי", "מה האירועים", "מה המשימות", "מה יש לי היום/מחר/השבוע", "תראה לי", "מה מתוכנן".
 - "cancel" — remove/delete something. Triggers: "בטל", "תבטל", "מחק", "תמחק", "תסיר", "בטלי".
 - "update" — move/reschedule/rename an EXISTING **event** (already in the calendar), OR add people to an existing event. Triggers: "תעביר", "תזיז", "העבר", "שנה", "עדכן", "דחה ל" when referring to an **event**. ALSO: adding a person to an already-scheduled event, e.g. "תוסיף את דנה לפגישה מחר". Set "query" to the event's identifying words and optionally "add_attendees". Do NOT use "update" to convert a **task** into an event — use "convert_task_to_event" instead.
@@ -41,6 +42,7 @@ Hebrew spelled-time rules (MUST):
 - If "בערב" or "בלילה" is present and the hour is 1–11 -> add 12 (e.g., "חמש בערב" -> 17:00, "שבע בערב" -> 19:00).
 - If "בבוקר" is present -> keep AM (e.g., "חמש בבוקר" -> 05:00).
 - If "בצהריים" is present and hour is 1–4 -> map to 13:00–16:00 (e.g., "אחת בצהריים" -> 13:00).
+- "וחצי" adds 30 minutes, "ורבע" adds 15 minutes: "שמונה וחצי" -> 08:30, "12 וחצי" -> 12:30, "תשע ורבע" -> 09:15.
 
 Weekday interpretation rules:
 - If a weekday is mentioned without a date (e.g. "ראשון"): use the next occurrence of that weekday after Today.
