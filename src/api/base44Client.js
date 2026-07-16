@@ -18,6 +18,16 @@ const TABLES = {
   TaskWebhookLog: 'task_webhook_logs',
 };
 
+// Never select OAuth tokens into the browser for CalendarConnection.
+const SELECT_COLUMNS = {
+  CalendarConnection:
+    'id,user_id,created_by,created_date,updated_date,provider,connected_email,default_calendar_id,sync_enabled,two_way_sync,last_sync_at',
+};
+
+function selectColumns(entityName) {
+  return SELECT_COLUMNS[entityName] || '*';
+}
+
 // Fields that are managed by the database / RLS and must never be written back.
 const READONLY_FIELDS = ['id', 'user_id', 'created_by', 'created_date', 'updated_date'];
 
@@ -46,7 +56,7 @@ function createEntity(entityName) {
 
   return {
     async list(sort, limit) {
-      let query = supabase.from(table).select('*');
+      let query = supabase.from(table).select(selectColumns(entityName));
       query = applySort(query, sort);
       if (limit) query = query.limit(limit);
       const { data, error } = await query;
@@ -55,7 +65,7 @@ function createEntity(entityName) {
     },
 
     async filter(criteria = {}, sort, limit) {
-      let query = supabase.from(table).select('*');
+      let query = supabase.from(table).select(selectColumns(entityName));
       for (const [key, value] of Object.entries(criteria)) {
         query = query.eq(key, value);
       }
@@ -67,7 +77,11 @@ function createEntity(entityName) {
     },
 
     async get(id) {
-      const { data, error } = await supabase.from(table).select('*').eq('id', id).single();
+      const { data, error } = await supabase
+        .from(table)
+        .select(selectColumns(entityName))
+        .eq('id', id)
+        .single();
       if (error) throw error;
       return data;
     },
@@ -76,7 +90,7 @@ function createEntity(entityName) {
       const { data, error } = await supabase
         .from(table)
         .insert(sanitize(payload))
-        .select()
+        .select(selectColumns(entityName))
         .single();
       if (error) throw error;
       return data;
@@ -87,7 +101,7 @@ function createEntity(entityName) {
         .from(table)
         .update(sanitize(payload))
         .eq('id', id)
-        .select()
+        .select(selectColumns(entityName))
         .single();
       if (error) throw error;
       return data;

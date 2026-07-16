@@ -14,7 +14,9 @@ export default async function handler(req, res) {
     const supabase = serviceClient();
     const { data: connections } = await supabase
       .from('calendar_connections')
-      .select('*')
+      .select(
+        'id, user_id, google_access_token, google_refresh_token, token_expiry'
+      )
       .eq('user_id', user.id)
       .limit(1);
 

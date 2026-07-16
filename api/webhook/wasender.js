@@ -1,9 +1,10 @@
 import { serviceClient, readJsonBody } from '../_lib/supabase.js';
-import { sendWasenderMessage, phonesMatch } from '../_lib/wasender.js';
+import { sendWasenderMessage, phonesMatch, normalizePhone } from '../_lib/wasender.js';
 import { interpretMessage } from '../_lib/ai.js';
 import { zonedTimeToUtc, nowInTimeZone, formatForUser, viewRange } from '../_lib/datetime.js';
 import { createGoogleEvent, deleteGoogleEvent, updateGoogleEvent } from '../_lib/gcal.js';
 import { findBestMatch } from '../_lib/match.js';
+import { findAdminAuthUser } from '../_lib/adminUser.js';
 
 const AFFIRMATIVE = ['כן', 'כ', 'אישור', 'אשר', 'מאשר', 'בטח', 'בסדר', 'אוקי', 'אוקיי', 'yes', 'y', 'ok', 'okay', 'sure', 'confirm'];
 const NEGATIVE = ['לא', 'ביטול', 'בטל', 'עזוב', 'no', 'n', 'cancel', 'stop'];
@@ -157,6 +158,12 @@ async function executePending(supabase, connection, action, timeZone, profile) {
 }
 
 // Resolve the admin as a virtual user when the sender matches ADMIN_WHATSAPP_PHONE.
+const PROFILE_COLS = 'user_id, full_name, phone, timezone, email';
+const TASK_MATCH_COLS = 'id, title, status';
+const EVENT_MATCH_COLS = 'id, title, start_at, end_at, google_event_id, attendees';
+const OPEN_TASKS_LIMIT = 100;
+const EVENT_MATCH_LIMIT = 80;
+
 // The admin skips onboarding (no user_profiles row), so we look up their auth user
 // by ADMIN_EMAIL and force the Jerusalem timezone.
 async function resolveAdminProfile(supabase, senderPhone) {
@@ -164,30 +171,42 @@ async function resolveAdminProfile(supabase, senderPhone) {
     .split(',')
     .map((p) => p.trim())
     .filter(Boolean);
-  const adminEmails = (process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
 
-  if (!adminPhones.some((p) => phonesMatch(p, senderPhone)) || adminEmails.length === 0) {
+  if (!adminPhones.some((p) => phonesMatch(p, senderPhone))) {
     return null;
   }
 
-  // Find the admin's auth user by email (paginate through users).
-  for (let page = 1; page <= 10; page += 1) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || !data?.users?.length) break;
-    const match = data.users.find((u) => adminEmails.includes((u.email || '').toLowerCase()));
-    if (match) {
-      return {
-        user_id: match.id,
-        email: match.email,
-        timezone: 'Asia/Jerusalem',
-      };
-    }
-    if (data.users.length < 200) break;
+  const match = await findAdminAuthUser(supabase);
+  if (!match) return null;
+
+  return {
+    user_id: match.id,
+    email: match.email,
+    timezone: 'Asia/Jerusalem',
+  };
+}
+
+// Prefer a narrow phone filter; fall back to a thin approved-user scan.
+async function findApprovedProfileByPhone(supabase, senderPhone) {
+  const digits = normalizePhone(senderPhone);
+  const last9 = digits ? digits.slice(-9) : null;
+
+  if (last9) {
+    const { data } = await supabase
+      .from('user_profiles')
+      .select(PROFILE_COLS)
+      .eq('status', 'approved')
+      .or(`phone.ilike.%${last9}%`);
+    const hit = (data || []).find((p) => phonesMatch(p.phone, senderPhone));
+    if (hit) return hit;
   }
-  return null;
+
+  const { data: profiles } = await supabase
+    .from('user_profiles')
+    .select(PROFILE_COLS)
+    .eq('status', 'approved');
+
+  return (profiles || []).find((p) => phonesMatch(p.phone, senderPhone)) || null;
 }
 
 // Incoming WhatsApp messages from Wasender.
@@ -234,13 +253,8 @@ export default async function handler(req, res) {
 
     const supabase = serviceClient();
 
-    // Match the sender phone to an approved user.
-    const { data: profiles } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('status', 'approved');
-
-    let profile = (profiles || []).find((p) => phonesMatch(p.phone, senderPhone));
+    // Match the sender phone to an approved user (avoid loading every profile row).
+    let profile = await findApprovedProfileByPhone(supabase, senderPhone);
 
     // Fallback: the admin skips onboarding, so match them by ADMIN_WHATSAPP_PHONE.
     if (!profile) {
@@ -256,10 +270,12 @@ export default async function handler(req, res) {
     const siteUrl =
       process.env.APP_URL || process.env.VITE_APP_URL || `https://${req.headers.host}`;
 
-    // Fetch the user's Google Calendar connection.
+    // Fetch the user's Google Calendar connection (tokens needed for Google API).
     const { data: connections } = await supabase
       .from('calendar_connections')
-      .select('*')
+      .select(
+        'id, user_id, created_by, sync_enabled, two_way_sync, default_calendar_id, google_access_token, google_refresh_token, token_expiry'
+      )
       .eq('user_id', profile.user_id)
       .limit(1);
     const connection = connections?.[0];
@@ -279,7 +295,7 @@ export default async function handler(req, res) {
     // --- Pending confirmation (e.g. a delete awaiting yes/no) ---
     const { data: pendingRow } = await supabase
       .from('whatsapp_pending')
-      .select('*')
+      .select('action, created_at')
       .eq('user_id', profile.user_id)
       .maybeSingle();
 
@@ -458,7 +474,8 @@ export default async function handler(req, res) {
           .select('title')
           .eq('user_id', profile.user_id)
           .in('status', ['open', 'in_progress'])
-          .order('created_date', { ascending: true });
+          .order('created_date', { ascending: true })
+          .limit(20);
         if (tasks && tasks.length) {
           const lines = tasks.map((t, i) => `${i + 1}. ${t.title}`);
           parts.push(`✅ משימות פתוחות:\n${lines.join('\n')}`);
@@ -477,9 +494,10 @@ export default async function handler(req, res) {
     if (intent === 'complete') {
       const { data: tasks } = await supabase
         .from('tasks')
-        .select('*')
+        .select(TASK_MATCH_COLS)
         .eq('user_id', profile.user_id)
-        .in('status', ['open', 'in_progress']);
+        .in('status', ['open', 'in_progress'])
+        .limit(OPEN_TASKS_LIMIT);
       const match = findBestMatch(tasks || [], result.query || text);
       if (!match) {
         await sendWasenderMessage(senderPhone, `לא מצאתי משימה פתוחה שמתאימה ל"${result.query || text}" 🤔`);
@@ -505,9 +523,10 @@ export default async function handler(req, res) {
 
       const { data: tasks } = await supabase
         .from('tasks')
-        .select('*')
+        .select(TASK_MATCH_COLS)
         .eq('user_id', profile.user_id)
-        .in('status', ['open', 'in_progress']);
+        .in('status', ['open', 'in_progress'])
+        .limit(OPEN_TASKS_LIMIT);
 
       const match = findBestMatch(tasks || [], result.query || text);
       if (!match) {
@@ -554,16 +573,18 @@ export default async function handler(req, res) {
 
       const { data: events } = await supabase
         .from('calendar_events')
-        .select('*')
+        .select(EVENT_MATCH_COLS)
         .eq('user_id', profile.user_id)
         .gte('start_at', dayAgo)
-        .order('start_at', { ascending: true });
+        .order('start_at', { ascending: true })
+        .limit(EVENT_MATCH_LIMIT);
 
       const { data: tasks } = await supabase
         .from('tasks')
-        .select('*')
+        .select(TASK_MATCH_COLS)
         .eq('user_id', profile.user_id)
-        .in('status', ['open', 'in_progress']);
+        .in('status', ['open', 'in_progress'])
+        .limit(OPEN_TASKS_LIMIT);
 
       // Bias by the AI hint: check the hinted type first, then fall back to both.
       const hinted = result.target_type === 'task' ? tasks : events;
@@ -629,10 +650,11 @@ export default async function handler(req, res) {
       const dayAgoU = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data: events } = await supabase
         .from('calendar_events')
-        .select('*')
+        .select(EVENT_MATCH_COLS)
         .eq('user_id', profile.user_id)
         .gte('start_at', dayAgoU)
-        .order('start_at', { ascending: true });
+        .order('start_at', { ascending: true })
+        .limit(EVENT_MATCH_LIMIT);
       const match = findBestMatch(events || [], result.query || text);
       if (!match) {
         await sendWasenderMessage(senderPhone, `לא מצאתי אירוע שמתאים ל"${result.query || text}" 🤔`);

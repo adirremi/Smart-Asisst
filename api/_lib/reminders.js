@@ -1,11 +1,13 @@
 import { sendWasenderMessage, phonesMatch } from './wasender.js';
 import { localMinutesOfDay, formatForUser } from './datetime.js';
+import { findAdminAuthUser } from './adminUser.js';
 
 export const TASKS_TIME = '08:45';
 export const EVENTS_TIME = '20:15';
 export const TASKS_TARGET = 8 * 60 + 45;
 export const EVENTS_TARGET = 20 * 60 + 15;
 export const WINDOW = 30;
+export const TASKS_REMINDER_LIMIT = 30;
 
 export const CRON_CONFIG = {
   path: '/api/cron/reminders',
@@ -62,27 +64,17 @@ async function markSent(supabase, userId, kind, localDate) {
 
 async function getAdminRecipient(supabase) {
   const phone = (process.env.ADMIN_WHATSAPP_PHONE || '').split(',')[0].trim();
-  const adminEmails = (process.env.ADMIN_EMAIL || process.env.VITE_ADMIN_EMAIL || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  if (!phone || adminEmails.length === 0) return null;
+  if (!phone) return null;
 
-  for (let page = 1; page <= 10; page += 1) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || !data?.users?.length) break;
-    const match = data.users.find((u) => adminEmails.includes((u.email || '').toLowerCase()));
-    if (match) {
-      return {
-        user_id: match.id,
-        full_name: match.user_metadata?.full_name || match.user_metadata?.name || 'מנהל',
-        phone,
-        timezone: 'Asia/Jerusalem',
-      };
-    }
-    if (data.users.length < 200) break;
-  }
-  return null;
+  const match = await findAdminAuthUser(supabase);
+  if (!match) return null;
+
+  return {
+    user_id: match.id,
+    full_name: match.user_metadata?.full_name || match.user_metadata?.name || 'מנהל',
+    phone,
+    timezone: 'Asia/Jerusalem',
+  };
 }
 
 export async function countOpenTasks(supabase, userId) {
@@ -133,7 +125,8 @@ export async function sendTasksReminder(supabase, r) {
     .select('title')
     .eq('user_id', r.user_id)
     .in('status', ['open', 'in_progress'])
-    .order('created_date', { ascending: true });
+    .order('created_date', { ascending: true })
+    .limit(TASKS_REMINDER_LIMIT);
 
   if (!tasks?.length) return false;
 
@@ -228,6 +221,32 @@ export async function getRemindersStatus(supabase) {
     todayByUser[key][row.kind] = row.sent_at;
   }
 
+  // Batch counts in 2 queries instead of 2N (was N+1 per user).
+  const userIds = (profiles || []).map((u) => u.user_id).filter(Boolean);
+  const openTasksByUser = {};
+  const upcomingEventsByUser = {};
+  if (userIds.length > 0) {
+    const nowIso = new Date().toISOString();
+    const [{ data: taskRows }, { data: eventRows }] = await Promise.all([
+      supabase
+        .from('tasks')
+        .select('user_id')
+        .in('user_id', userIds)
+        .in('status', ['open', 'in_progress']),
+      supabase
+        .from('calendar_events')
+        .select('user_id')
+        .in('user_id', userIds)
+        .gte('start_at', nowIso),
+    ]);
+    for (const row of taskRows || []) {
+      openTasksByUser[row.user_id] = (openTasksByUser[row.user_id] || 0) + 1;
+    }
+    for (const row of eventRows || []) {
+      upcomingEventsByUser[row.user_id] = (upcomingEventsByUser[row.user_id] || 0) + 1;
+    }
+  }
+
   const users = [];
   for (const u of profiles || []) {
     const localDate = u.timezone ? localDateInTz(u.timezone) : null;
@@ -235,8 +254,8 @@ export async function getRemindersStatus(supabase) {
     const sentKey = `${u.user_id}:${localDate}`;
     const sent = todayByUser[sentKey] || {};
 
-    const openTasks = u.user_id ? await countOpenTasks(supabase, u.user_id) : 0;
-    const upcomingEvents = u.user_id ? await countUpcomingEvents(supabase, u.user_id) : 0;
+    const openTasks = openTasksByUser[u.user_id] || 0;
+    const upcomingEvents = upcomingEventsByUser[u.user_id] || 0;
 
     users.push({
       user_id: u.user_id,

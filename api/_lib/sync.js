@@ -1,11 +1,16 @@
 import { getAccessTokenForConnection } from './google.js';
+import { mapPool } from './concurrency.js';
+
+const WRITE_CONCURRENCY = 8;
 
 // Core two-way Google Calendar sync for a single user.
 // Shared by the syncGoogleCalendar function and the calendarWebhook.
 export async function runSync(supabase, userId) {
   const { data: connections } = await supabase
     .from('calendar_connections')
-    .select('*')
+    .select(
+      'id, user_id, created_by, sync_enabled, two_way_sync, default_calendar_id, google_access_token, google_refresh_token, token_expiry'
+    )
     .eq('user_id', userId)
     .limit(1);
 
@@ -66,9 +71,10 @@ export async function runSync(supabase, userId) {
   const calendarData = await calendarResponse.json();
   const googleEvents = calendarData.items || [];
 
+  // Only need ids for matching — avoid pulling full event rows.
   const { data: existingEvents } = await supabase
     .from('calendar_events')
-    .select('*')
+    .select('id, google_event_id')
     .eq('user_id', userId)
     .eq('source', 'google');
 
@@ -82,6 +88,7 @@ export async function runSync(supabase, userId) {
   let pushFailed = 0;
   let firstPushError = null;
 
+  const upsertOps = [];
   for (const googleEvent of googleEvents) {
     if (googleEvent.status === 'cancelled') continue;
     // Some Google entries (working location, focus time, etc.) may lack start/end.
@@ -105,23 +112,37 @@ export async function runSync(supabase, userId) {
 
     const existing = existingByGoogleId[googleEvent.id];
     if (existing) {
-      await supabase.from('calendar_events').update(eventData).eq('id', existing.id);
-      updated++;
+      upsertOps.push({ type: 'update', id: existing.id, eventData });
     } else {
-      await supabase
-        .from('calendar_events')
-        .insert({ ...eventData, user_id: userId, created_by: connection.created_by });
-      created++;
+      upsertOps.push({
+        type: 'insert',
+        eventData: { ...eventData, user_id: userId, created_by: connection.created_by },
+      });
     }
+  }
+
+  const writeKinds = await mapPool(upsertOps, WRITE_CONCURRENCY, async (op) => {
+    if (op.type === 'update') {
+      await supabase.from('calendar_events').update(op.eventData).eq('id', op.id);
+      return 'update';
+    }
+    await supabase.from('calendar_events').insert(op.eventData);
+    return 'insert';
+  });
+  for (const kind of writeKinds) {
+    if (kind === 'update') updated += 1;
+    else created += 1;
   }
 
   if (connection.two_way_sync) {
     const { data: localEvents } = await supabase
       .from('calendar_events')
-      .select('*')
+      .select('id, title, description, start_at, end_at, location, attendees, all_day')
       .eq('user_id', userId)
       .eq('source', 'local');
 
+    // Google Calendar API must stay sequential per user (quota / ordering);
+    // only DB writes after a successful push need to stay awaited.
     for (const localEvent of localEvents || []) {
       if (!localEvent.start_at || !localEvent.end_at) continue;
 
