@@ -1,4 +1,4 @@
-import { sendWasenderMessage, phonesMatch } from './wasender.js';
+import { sendWasenderMessage, phonesMatch, isMessageQueueConfigured } from './wasender.js';
 import { localMinutesOfDay, formatForUser } from './datetime.js';
 import { findAdminAuthUser } from './adminUser.js';
 
@@ -294,7 +294,7 @@ export async function getRemindersStatus(supabase) {
     },
     env: {
       cronSecretSet: !!process.env.CRON_SECRET,
-      wasenderSet: !!process.env.WASENDER_API_KEY,
+      wasenderSet: isMessageQueueConfigured(),
       reminderTableOk: !tableError,
       reminderTableError: tableError?.message || null,
     },

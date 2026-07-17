@@ -1,4 +1,18 @@
-const WASENDER_API_URL = 'https://www.wasenderapi.com/api/send-message';
+// Outgoing WhatsApp messages go through the shared message-queue Edge Function.
+const DEFAULT_ENQUEUE_URL =
+  'https://uresekvgdiqlssovnsgx.supabase.co/functions/v1/enqueue-message';
+
+function enqueueUrl() {
+  return (process.env.MESSAGE_QUEUE_URL || DEFAULT_ENQUEUE_URL).trim();
+}
+
+function enqueueToken() {
+  return (
+    process.env.MESSAGE_QUEUE_BEARER_TOKEN ||
+    process.env.MESSAGE_QUEUE_TOKEN ||
+    ''
+  ).trim();
+}
 
 // Normalize to E.164 digits only (e.g. 972501234567).
 export function normalizePhone(phone) {
@@ -19,30 +33,39 @@ export function phonesMatch(a, b) {
   return na.slice(-9) === nb.slice(-9);
 }
 
-export async function sendWasenderMessage(to, text) {
-  const apiKey = process.env.WASENDER_API_KEY;
-  const recipient = normalizePhone(to);
+export function isMessageQueueConfigured() {
+  return !!(enqueueToken() && enqueueUrl());
+}
 
-  if (!apiKey || !recipient) {
-    console.warn('Wasender not configured — logging instead:', text);
+// Enqueue an outgoing WhatsApp message (phone + message_text).
+export async function sendWasenderMessage(to, text) {
+  const token = enqueueToken();
+  const recipient = normalizePhone(to);
+  const messageText = text == null ? '' : String(text);
+
+  if (!token || !recipient) {
+    console.warn('Message queue not configured — logging instead:', messageText);
     return { sent: false, reason: 'not_configured' };
   }
 
-  const res = await fetch(WASENDER_API_URL, {
+  const res = await fetch(enqueueUrl(), {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ to: recipient, text }),
+    body: JSON.stringify({
+      phone: recipient,
+      message_text: messageText,
+    }),
   });
 
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    console.error('Wasender API error:', data);
-    throw new Error(data.message || data.error || 'Wasender send failed');
+    console.error('Message queue enqueue error:', data);
+    throw new Error(data.message || data.error || 'Message queue enqueue failed');
   }
 
-  return { sent: true, data };
+  return { sent: true, queued: true, data };
 }
