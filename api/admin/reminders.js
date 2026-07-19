@@ -35,6 +35,17 @@ export default async function handler(req, res) {
         return;
       }
 
+      // Resend today's reminders to all approved users (ignore window + dedup).
+      if (action === 'resend_all') {
+        const results = await runReminders(supabase, {
+          force: true,
+          skipDedup: true,
+          kind: kind || null,
+        });
+        res.status(200).json({ success: true, resend: true, ...results });
+        return;
+      }
+
       if (action === 'test_send') {
         if (!userId || !['tasks', 'events'].includes(kind)) {
           res.status(400).json({ error: 'userId and kind (tasks|events) required' });

@@ -115,8 +115,8 @@ export async function sendEventsReminder(supabase, r) {
   });
 
   const msg = `היי ${r.full_name || ''}! האירועים הקרובים שלך:\n${lines.join('\n')}`;
-  await sendWasenderMessage(r.phone, msg);
-  return true;
+  const result = await sendWasenderMessage(r.phone, msg);
+  return !!result?.sent;
 }
 
 export async function sendTasksReminder(supabase, r) {
@@ -132,8 +132,8 @@ export async function sendTasksReminder(supabase, r) {
 
   const lines = tasks.map((t, i) => `${i + 1}. ${t.title}`);
   const msg = `היי 👋 המשימות שלך להיום הן:\n${lines.join('\n')}`;
-  await sendWasenderMessage(r.phone, msg);
-  return true;
+  const result = await sendWasenderMessage(r.phone, msg);
+  return !!result?.sent;
 }
 
 async function buildRecipients(supabase) {
