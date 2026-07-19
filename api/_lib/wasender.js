@@ -38,20 +38,31 @@ export function isMessageQueueConfigured() {
 }
 
 // Enqueue an outgoing WhatsApp message (phone + message_text).
+// Auth: MESSAGE_QUEUE_BEARER_TOKEN must be a JWT from the message_queue
+// Supabase project (anon or service_role) because enqueue-message has verify_jwt=true.
 export async function sendWasenderMessage(to, text) {
   const token = enqueueToken();
   const recipient = normalizePhone(to);
   const messageText = text == null ? '' : String(text);
+  const url = enqueueUrl();
 
-  if (!token || !recipient) {
-    console.warn('Message queue not configured — logging instead:', messageText);
-    return { sent: false, reason: 'not_configured' };
+  if (!token) {
+    console.warn(
+      'Message queue missing MESSAGE_QUEUE_BEARER_TOKEN — not sending:',
+      messageText.slice(0, 80)
+    );
+    return { sent: false, reason: 'missing_token' };
+  }
+  if (!recipient) {
+    console.warn('Message queue missing phone — not sending:', messageText.slice(0, 80));
+    return { sent: false, reason: 'missing_phone' };
   }
 
-  const res = await fetch(enqueueUrl(), {
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
+      apikey: token,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -63,9 +74,18 @@ export async function sendWasenderMessage(to, text) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    console.error('Message queue enqueue error:', data);
-    throw new Error(data.message || data.error || 'Message queue enqueue failed');
+    console.error('Message queue enqueue error:', {
+      url,
+      status: res.status,
+      data,
+    });
+    throw new Error(data.message || data.error || `Message queue enqueue failed (${res.status})`);
   }
 
+  console.info('Message queue enqueued:', {
+    phone: recipient,
+    message_id: data.message_id || data?.data?.id || null,
+    action: data.action || null,
+  });
   return { sent: true, queued: true, data };
 }
